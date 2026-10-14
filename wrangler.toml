@@ -1,0 +1,29 @@
+name = "short-drama"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+# Trang admin tĩnh nằm trong thư mục public/ (truy cập tại /admin/)
+[assets]
+directory = "./public"
+
+# Database D1: lưu thông tin phim + tập
+# Sau khi chạy `npx wrangler d1 create short-drama-db`, dán database_id vào đây
+[[d1_databases]]
+binding = "DB"
+database_name = "short-drama-db"
+database_id = "529c5311-94bd-4e7e-b285-be8870dcfb8c"
+migrations_dir = "migrations"
+
+# Bucket R2: lưu file video, thumbnail, poster
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "short-drama-files"
+
+[vars]
+# Domain public gắn vào bucket R2, ví dụ "https://cdn.tenmien.com"
+# Để trống => video được phát qua chính Worker tại /media/... (dùng để test)
+MEDIA_BASE_URL = "https://amzshortdrama.lol"
+
+# ADMIN_TOKEN KHÔNG để ở đây. Đặt bằng lệnh:
+#   npx wrangler secret put ADMIN_TOKEN
+# Khi chạy local, đặt trong file .dev.vars

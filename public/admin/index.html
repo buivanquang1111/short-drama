@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Short Drama Admin</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1d2129; --muted:#6b7280; --line:#e5e7eb; --accent:#f38020; --danger:#dc2626; --ok:#16a34a; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f1115; --card:#181b21; --text:#e8eaed; --muted:#9aa0a6; --line:#2a2e36; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--line); background:var(--card); position:sticky; top:0; z-index:5; }
+  header h1 { font-size:16px; margin:0; flex:1; }
+  main { display:grid; grid-template-columns: 320px 1fr; gap:16px; padding:16px; max-width:1280px; margin:0 auto; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .card + .card { margin-top:16px; }
+  .card h2 { font-size:14px; margin:0 0 10px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:8px 0 3px; }
+  label.inline { display:inline-flex; align-items:center; gap:6px; margin:0; color:var(--text); font-size:13px; }
+  input[type=text], input[type=number], input[type=password], textarea { width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:transparent; color:var(--text); font:inherit; }
+  textarea { min-height:60px; resize:vertical; }
+  button { padding:7px 12px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); cursor:pointer; font:inherit; white-space:nowrap; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.danger { color:var(--danger); }
+  button.small { padding:4px 8px; font-size:12px; }
+  button:disabled { opacity:.5; cursor:default; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .grow { flex:1; min-width:150px; }
+  .movie { display:flex; gap:10px; align-items:center; padding:8px; border-radius:8px; cursor:pointer; }
+  .movie:hover, .movie.active { background:color-mix(in srgb, var(--accent) 12%, transparent); }
+  .movie img, .ph { width:40px; height:56px; object-fit:cover; border-radius:4px; background:var(--line); flex:none; }
+  .muted { color:var(--muted); font-size:12px; }
+  .table-wrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:6px 6px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  th { font-size:12px; color:var(--muted); font-weight:600; }
+  td img, .thumb-ph { width:72px; height:40px; object-fit:cover; border-radius:4px; background:var(--line); display:block; }
+  td input[type=text], td input[type=number] { padding:5px 7px; }
+  .w-ep { width:70px; } .w-dur { width:90px; }
+  .fname { max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
+  .bad { border-color:var(--danger) !important; }
+  .st-ok { color:var(--ok); } .st-err { color:var(--danger); }
+  .progress { height:6px; background:var(--line); border-radius:3px; overflow:hidden; margin-top:10px; }
+  .progress > div { height:100%; width:0; background:var(--accent); transition:width .1s; }
+  .hidden { display:none !important; }
+  a { color:var(--accent); }
+  code { font-size:12px; }
+  .edit-row td { background:color-mix(in srgb, var(--accent) 6%, transparent); }
+  .preview-thumb { width:120px; height:68px; object-fit:cover; border-radius:6px; background:var(--line); display:block; margin-top:6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Short Drama Admin</h1>
+  <input id="token" type="password" placeholder="ADMIN_TOKEN" style="max-width:220px">
+  <button id="saveToken">Đăng nhập</button>
+  <span id="authState" class="muted"></span>
+</header>
+
+<main>
+  <!-- ============ CỘT TRÁI ============ -->
+  <section>
+    <div class="card">
+      <h2>Tạo phim mới</h2>
+      <form id="movieForm">
+        <label>Tên phim *</label><input name="title" type="text" required>
+        <label>Tiêu đề phụ</label><input name="subtitle" type="text">
+        <label>Mô tả</label><textarea name="description"></textarea>
+        <label>Poster (jpg/png/webp)</label><input name="poster" type="file" accept="image/*">
+        <div class="row" style="margin-top:10px"><button class="primary" type="submit">Tạo phim</button></div>
+      </form>
+    </div>
+    <div class="card">
+      <div class="row" style="justify-content:space-between"><h2 style="margin:0">Danh sách phim</h2><button id="reload" class="small">Tải lại</button></div>
+      <div id="movies" style="margin-top:8px"></div>
+    </div>
+  </section>
+
+  <!-- ============ CỘT PHẢI ============ -->
+  <section>
+    <div id="empty" class="card muted">Chọn một phim bên trái để quản lý tập.</div>
+
+    <div id="detail" class="hidden">
+      <!-- Thông tin phim -->
+      <div class="card">
+        <div class="row" style="justify-content:space-between">
+          <div>
+            <h2 id="dTitle" style="margin:0"></h2>
+            <div id="dSub" class="muted"></div>
+          </div>
+          <div class="row">
+            <a id="dJson" target="_blank">Xem JSON</a>
+            <button id="dEdit" class="small">Sửa phim</button>
+            <button id="dDelete" class="small danger">Xoá phim</button>
+          </div>
+        </div>
+        <form id="movieEdit" class="hidden" style="margin-top:10px">
+          <div class="row">
+            <div class="grow"><label>Tên phim *</label><input name="title" type="text" required></div>
+            <div class="grow"><label>Tiêu đề phụ</label><input name="subtitle" type="text"></div>
+          </div>
+          <label>Mô tả</label><textarea name="description"></textarea>
+          <label>Đổi poster</label><input name="poster" type="file" accept="image/*">
+          <div class="row" style="margin-top:10px"><button class="primary" type="submit">Lưu</button><button type="button" id="dEditCancel">Huỷ</button></div>
+        </form>
+      </div>
+
+      <!-- Thêm 1 tập -->
+      <div class="card">
+        <h2>Thêm 1 tập</h2>
+        <form id="epForm">
+          <div class="row">
+            <div style="width:90px"><label>Tập số *</label><input name="ep_number" type="number" min="1" required></div>
+            <div class="grow"><label>Tiêu đề</label><input name="title" type="text" placeholder="Để trống = Tập N"></div>
+            <div class="grow"><label>Tiêu đề phụ</label><input name="subtitle" type="text"></div>
+            <div style="width:120px"><label>Thời lượng (giây)</label><input name="duration" type="number" min="0" placeholder="Tự lấy"></div>
+          </div>
+          <div class="row" style="align-items:flex-start">
+            <div class="grow"><label>Video *</label><input name="video" type="file" accept="video/*" required></div>
+            <div class="grow">
+              <label>Thumbnail <span class="muted">(bỏ trống = tự cắt từ video)</span></label>
+              <input name="thumb" type="file" accept="image/*">
+              <img id="epThumbPreview" class="preview-thumb hidden" alt="">
+            </div>
+          </div>
+          <div class="row" style="margin-top:10px"><button class="primary" type="submit">Upload tập</button><span id="epFormMsg" class="muted"></span></div>
+          <div class="progress"><div id="epProg"></div></div>
+        </form>
+      </div>
+
+      <!-- Thêm nhiều tập -->
+      <div class="card">
+        <h2>Thêm nhiều tập cùng lúc</h2>
+        <div class="muted">
+          Chọn nhiều file video (có thể chọn kèm ảnh thumbnail). Danh sách hiện ra để bạn kiểm tra và sửa trước khi upload.<br>
+          Số tập: nếu tên file có số (<code>ep_05.mp4</code>, <code>tap5.mp4</code>) thì lấy số cuối cùng; nếu không có số thì đánh tiếp theo thứ tự tên file.
+          Ảnh có cùng số tập hoặc cùng tên với video được dùng làm thumbnail; không có ảnh thì tự cắt 1 khung hình từ video.
+        </div>
+        <div class="row" style="margin-top:10px">
+          <input id="bulkFiles" type="file" multiple accept="video/*,image/*">
+        </div>
+        <div id="bulkPanel" class="hidden">
+          <div class="row" style="margin-top:12px">
+            <div class="grow"><label>Tiêu đề mẫu (<code>{n}</code> = số tập)</label><input id="tplTitle" type="text" value="Tập {n}"></div>
+            <div class="grow"><label>Tiêu đề phụ mẫu (tuỳ chọn)</label><input id="tplSub" type="text" placeholder="vd: Tên phim - tập {n}"></div>
+            <div style="padding-top:22px"><button id="applyTpl" class="small">Áp dụng cho tất cả</button></div>
+          </div>
+          <div class="table-wrap" style="margin-top:10px">
+            <table>
+              <thead><tr><th>File</th><th>Tập</th><th>Tiêu đề</th><th>Tiêu đề phụ</th><th>Thời lượng (s)</th><th>Thumb</th><th>Trạng thái</th><th></th></tr></thead>
+              <tbody id="bulkRows"></tbody>
+            </table>
+          </div>
+          <div class="row" style="margin-top:10px">
+            <button id="bulkStart" class="primary">Upload tất cả</button>
+            <button id="bulkClear" class="small">Xoá danh sách</button>
+            <span id="bulkMsg" class="muted"></span>
+          </div>
+          <div class="progress"><div id="bulkProg"></div></div>
+        </div>
+      </div>
+
+      <!-- Danh sách tập -->
+      <div class="card">
+        <h2>Các tập (<span id="epCount">0</span>)</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>Thumb</th><th>Tiêu đề</th><th>Thời lượng</th><th>Video</th><th></th></tr></thead>
+            <tbody id="episodes"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (s, root = document) => root.querySelector(s);
+let TOKEN = "";
+try { TOKEN = localStorage.getItem("admin_token") || ""; } catch {}
+$("#token").value = TOKEN;
+
+let current = null;        // id phim đang mở
+let currentMovie = null;   // dữ liệu phim đang mở
+let currentEps = [];       // các tập của phim đang mở
+let bulkRows = [];         // danh sách chờ upload hàng loạt
+
+// ------------------------------------------------------------------ API helpers
+async function api(path, opts = {}) {
+  const res = await fetch(path, { ...opts, headers: { ...(opts.headers || {}), authorization: "Bearer " + TOKEN } });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+/** Upload multipart có tiến trình */
+function upload(method, path, formData, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, path);
+    xhr.setRequestHeader("authorization", "Bearer " + TOKEN);
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress && onProgress(e.loaded / e.total);
+    xhr.onload = () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch {}
+      xhr.status < 300 ? resolve(data) : reject(new Error(data.error || xhr.statusText || ("HTTP " + xhr.status)));
+    };
+    xhr.onerror = () => reject(new Error("Lỗi mạng"));
+    xhr.send(formData);
+  });
+}
+
+// ------------------------------------------------------------------ utils
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c])); }
+function fmtDur(s) { if (s == null || s === "") return ""; s = Math.round(Number(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+function stem(name) { return name.replace(/\.[^.]+$/, ""); }
+function lastNumber(name) { const m = stem(name).match(/\d+/g); return m ? Number(m[m.length - 1]) : null; }
+function isVideo(f) { return f.type.startsWith("video/") || /\.(mp4|m4v|mov|webm)$/i.test(f.name); }
+function isImage(f) { return f.type.startsWith("image/") || /\.(jpe?g|png|webp)$/i.test(f.name); }
+function fillTpl(tpl, n) { return (tpl || "").replaceAll("{n}", n ?? ""); }
+const natural = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+/**
+ * Đọc thời lượng + cắt 1 khung hình làm thumbnail ngay trên trình duyệt.
+ * Trả về { duration, thumb } (thumb là File jpg hoặc null). Không bao giờ throw.
+ */
+function probeVideo(file, wantThumb) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const v = document.createElement("video");
+    let duration = null, done = false;
+    const finish = (thumb) => { if (done) return; done = true; URL.revokeObjectURL(url); v.removeAttribute("src"); v.load(); resolve({ duration, thumb }); };
+    const timer = setTimeout(() => finish(null), 20000);
+    v.muted = true; v.playsInline = true; v.preload = "auto";
+    v.onerror = () => { clearTimeout(timer); finish(null); };
+    v.onloadedmetadata = () => {
+      if (Number.isFinite(v.duration)) duration = Math.round(v.duration);
+      if (!wantThumb) { clearTimeout(timer); return finish(null); }
+      v.currentTime = Math.min(1, (v.duration || 2) / 2);
+    };
+    v.onseeked = () => {
+      try {
+        const w = 640, h = Math.round(w * (v.videoHeight || 360) / (v.videoWidth || 640));
+        const c = document.createElement("canvas"); c.width = w; c.height = h;
+        c.getContext("2d").drawImage(v, 0, 0, w, h);
+        c.toBlob((b) => { clearTimeout(timer); finish(b ? new File([b], stem(file.name) + "_thumb.jpg", { type: "image/jpeg" }) : null); }, "image/jpeg", 0.85);
+      } catch { clearTimeout(timer); finish(null); }
+    };
+    v.src = url;
+  });
+}
+
+// ------------------------------------------------------------------ auth
+$("#saveToken").onclick = async () => {
+  TOKEN = $("#token").value.trim();
+  try { localStorage.setItem("admin_token", TOKEN); } catch {}
+  try { await api("/api/admin/ping"); $("#authState").textContent = "✓ Đã đăng nhập"; }
+  catch (e) { $("#authState").textContent = "✗ " + e.message; }
+};
+
+// ------------------------------------------------------------------ movies
+async function loadMovies() {
+  const data = await fetch("/api/movies?limit=100").then((r) => r.json());
+  $("#movies").innerHTML = data.movies.map((m) => `
+    <div class="movie ${current === m.id ? "active" : ""}" data-id="${m.id}">
+      ${m.poster ? `<img src="${esc(m.poster)}" loading="lazy" alt="">` : `<div class="ph"></div>`}
+      <div><div>${esc(m.title)}</div><div class="muted">#${m.id} · ${m.episode_count} tập</div></div>
+    </div>`).join("") || `<div class="muted">Chưa có phim nào.</div>`;
+  document.querySelectorAll(".movie").forEach((el) => el.onclick = () => openMovie(Number(el.dataset.id)));
+}
+
+async function openMovie(id) {
+  if (current !== id) clearBulk();
+  current = id;
+  const data = await fetch("/api/movies/" + id).then((r) => r.json());
+  currentMovie = data.movie;
+  currentEps = data.episodes;
+  $("#empty").classList.add("hidden");
+  $("#detail").classList.remove("hidden");
+  $("#movieEdit").classList.add("hidden");
+  $("#dTitle").textContent = data.movie.title;
+  $("#dSub").textContent = data.movie.subtitle || "";
+  $("#dJson").href = "/api/movies/" + id;
+  renderEpisodes();
+  $("#epForm").ep_number.value = maxEp() + 1;
+  refreshBulkNumbers();
+  loadMovies();
+}
+
+function maxEp() { return currentEps.reduce((mx, e) => Math.max(mx, e.ep_number), 0); }
+
+$("#reload").onclick = loadMovies;
+
+$("#movieForm").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const btn = ev.target.querySelector("button"); btn.disabled = true;
+  try {
+    const data = await upload("POST", "/api/admin/movies", new FormData(ev.target));
+    ev.target.reset();
+    await openMovie(data.movie.id);
+  } catch (e) { alert(e.message); }
+  btn.disabled = false;
+};
+
+$("#dEdit").onclick = () => {
+  const f = $("#movieEdit");
+  f.title.value = currentMovie.title || "";
+  f.subtitle.value = currentMovie.subtitle || "";
+  f.description.value = currentMovie.description || "";
+  f.poster.value = "";
+  f.classList.remove("hidden");
+};
+$("#dEditCancel").onclick = () => $("#movieEdit").classList.add("hidden");
+$("#movieEdit").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const f = ev.target, fd = new FormData();
+  fd.append("title", f.title.value); fd.append("subtitle", f.subtitle.value); fd.append("description", f.description.value);
+  if (f.poster.files[0]) fd.append("poster", f.poster.files[0]);
+  try { await upload("PATCH", "/api/admin/movies/" + current, fd); await openMovie(current); }
+  catch (e) { alert(e.message); }
+};
+
+$("#dDelete").onclick = async () => {
+  if (!current || !confirm("Xoá phim này cùng TOÀN BỘ tập và file video?")) return;
+  try {
+    await api("/api/admin/movies/" + current, { method: "DELETE" });
+    current = null; clearBulk();
+    $("#detail").classList.add("hidden"); $("#empty").classList.remove("hidden");
+    loadMovies();
+  } catch (e) { alert(e.message); }
+};
+
+// ------------------------------------------------------------------ episode list + inline edit
+function renderEpisodes() {
+  $("#epCount").textContent = currentEps.length;
+  $("#episodes").innerHTML = currentEps.map((e) => `
+    <tr data-id="${e.id}">
+      <td>${e.ep_number}</td>
+      <td>${e.thumb ? `<img src="${esc(e.thumb)}" loading="lazy" alt="">` : `<div class="thumb-ph"></div>`}</td>
+      <td>${esc(e.title)}<div class="muted">${esc(e.subtitle || "")}</div></td>
+      <td>${fmtDur(e.duration)}</td>
+      <td><a href="${esc(e.video_url)}" target="_blank">Mở</a></td>
+      <td><div class="row"><button class="small" data-edit="${e.id}">Sửa</button><button class="small danger" data-del="${e.id}">Xoá</button></div></td>
+    </tr>`).join("");
+  document.querySelectorAll("[data-del]").forEach((b) => b.onclick = async () => {
+    if (!confirm("Xoá tập này?")) return;
+    try { await api("/api/admin/episodes/" + b.dataset.del, { method: "DELETE" }); openMovie(current); }
+    catch (e) { alert(e.message); }
+  });
+  document.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => openEdit(Number(b.dataset.edit)));
+}
+
+function openEdit(id) {
+  document.querySelectorAll(".edit-row").forEach((r) => r.remove());
+  const ep = currentEps.find((e) => e.id === id);
+  const tr = document.querySelector(`#episodes tr[data-id="${id}"]`);
+  const row = document.createElement("tr");
+  row.className = "edit-row";
+  row.innerHTML = `<td colspan="6">
+    <div class="row">
+      <div style="width:80px"><label>Tập số</label><input data-f="ep_number" type="number" min="1" value="${ep.ep_number}"></div>
+      <div class="grow"><label>Tiêu đề</label><input data-f="title" type="text" value="${esc(ep.title)}"></div>
+      <div class="grow"><label>Tiêu đề phụ</label><input data-f="subtitle" type="text" value="${esc(ep.subtitle || "")}"></div>
+      <div style="width:120px"><label>Thời lượng (giây)</label><input data-f="duration" type="number" min="0" value="${ep.duration ?? ""}"></div>
+    </div>
+    <div class="row">
+      <div class="grow"><label>Thay video</label><input data-f="video" type="file" accept="video/*"></div>
+      <div class="grow"><label>Thay thumbnail</label><input data-f="thumb" type="file" accept="image/*"></div>
+    </div>
+    <div class="row" style="margin-top:8px"><button class="primary small" data-save>Lưu</button><button class="small" data-cancel>Huỷ</button><span class="muted" data-msg></span></div>
+  </td>`;
+  tr.after(row);
+  const get = (f) => row.querySelector(`[data-f="${f}"]`);
+  // thay video mới => tự cập nhật thời lượng
+  get("video").onchange = async () => {
+    const f = get("video").files[0]; if (!f) return;
+    const { duration } = await probeVideo(f, false);
+    if (duration != null) get("duration").value = duration;
+  };
+  row.querySelector("[data-cancel]").onclick = () => row.remove();
+  row.querySelector("[data-save]").onclick = async (ev) => {
+    const btn = ev.target; btn.disabled = true;
+    const fd = new FormData();
+    const n = Number(get("ep_number").value);
+    if (n && n !== ep.ep_number) fd.append("ep_number", n);
+    fd.append("title", get("title").value);
+    fd.append("subtitle", get("subtitle").value);
+    fd.append("duration", get("duration").value);
+    if (get("video").files[0]) fd.append("video", get("video").files[0]);
+    if (get("thumb").files[0]) fd.append("thumb", get("thumb").files[0]);
+    try {
+      await upload("PATCH", "/api/admin/episodes/" + id, fd, (p) => row.querySelector("[data-msg]").textContent = Math.round(p * 100) + "%");
+      await openMovie(current);
+    } catch (e) { alert(e.message); btn.disabled = false; }
+  };
+}
+
+// ------------------------------------------------------------------ thêm 1 tập
+const epForm = $("#epForm");
+epForm.video.onchange = async () => {
+  const f = epForm.video.files[0];
+  $("#epThumbPreview").classList.add("hidden");
+  if (!f) return;
+  $("#epFormMsg").textContent = "Đang đọc video...";
+  const { duration, thumb } = await probeVideo(f, true);
+  if (duration != null && !epForm.duration.value) epForm.duration.value = duration;
+  epForm._autoThumb = thumb;
+  if (thumb && !epForm.thumb.files[0]) { $("#epThumbPreview").src = URL.createObjectURL(thumb); $("#epThumbPreview").classList.remove("hidden"); }
+  $("#epFormMsg").textContent = thumb ? "Đã tự cắt thumbnail từ video" : "";
+};
+epForm.thumb.onchange = () => {
+  const f = epForm.thumb.files[0];
+  if (f) { $("#epThumbPreview").src = URL.createObjectURL(f); $("#epThumbPreview").classList.remove("hidden"); }
+};
+epForm.onsubmit = async (ev) => {
+  ev.preventDefault();
+  if (!current) return;
+  const btn = epForm.querySelector("button[type=submit]"); btn.disabled = true;
+  const fd = new FormData(epForm);
+  if (!epForm.thumb.files[0]) { fd.delete("thumb"); if (epForm._autoThumb) fd.append("thumb", epForm._autoThumb); }
+  try {
+    await upload("POST", `/api/admin/movies/${current}/episodes`, fd, (p) => $("#epProg").style.width = Math.round(p * 100) + "%");
+    epForm.reset(); epForm._autoThumb = null; $("#epProg").style.width = "0";
+    $("#epThumbPreview").classList.add("hidden"); $("#epFormMsg").textContent = "✓ Đã upload";
+    await openMovie(current);
+  } catch (e) { alert(e.message); }
+  btn.disabled = false;
+};
+
+// ------------------------------------------------------------------ thêm nhiều tập
+/**
+ * Ghép video + ảnh, đánh số tập.
+ * - Có số trong tên file => dùng số cuối cùng.
+ * - Không có số => đánh tiếp sau số lớn nhất (đã có trên server và trong danh sách), theo thứ tự tên file.
+ * - Ảnh khớp video nếu cùng tên (bỏ đuôi) hoặc cùng số tập.
+ */
+function buildRows(files, existingMax) {
+  const videos = files.filter(isVideo).sort((a, b) => natural.compare(a.name, b.name));
+  const images = files.filter((f) => !isVideo(f) && isImage(f));
+  const byStem = new Map(images.map((f) => [stem(f.name).toLowerCase(), f]));
+  const byNum = new Map();
+  for (const f of images) { const n = lastNumber(f.name); if (n != null && !byNum.has(n)) byNum.set(n, f); }
+
+  const rows = videos.map((f) => ({ file: f, ep: lastNumber(f.name), fromName: lastNumber(f.name) != null }));
+  let next = Math.max(existingMax, ...rows.filter((r) => r.fromName).map((r) => r.ep), 0) + 1;
+  for (const r of rows) if (r.ep == null) r.ep = next++;
+  for (const r of rows) {
+    r.thumbFile = byStem.get(stem(r.file.name).toLowerCase()) || (r.fromName ? byNum.get(r.ep) : null) || null;
+    r.autoThumb = null; r.duration = null; r.subtitle = ""; r.status = ""; r.title = "";
+  }
+  return rows;
+}
+
+$("#bulkFiles").onchange = async () => {
+  const files = [...$("#bulkFiles").files];
+  if (!files.length) return;
+  bulkRows = buildRows(files, maxEp());
+  if (!bulkRows.length) { alert("Chưa chọn file video nào"); return; }
+  applyTemplate();
+  $("#bulkPanel").classList.remove("hidden");
+  renderBulk();
+  // đọc thời lượng + tự cắt thumb lần lượt (tránh mở quá nhiều video cùng lúc)
+  for (const r of bulkRows) {
+    r.status = "Đang đọc...";
+    renderBulkRow(r);
+    const { duration, thumb } = await probeVideo(r.file, !r.thumbFile);
+    if (!bulkRows.includes(r)) continue; // danh sách đã bị xoá
+    if (duration != null && r.duration == null) r.duration = duration;
+    r.autoThumb = thumb;
+    r.status = "";
+    renderBulkRow(r);
+  }
+};
+
+function applyTemplate() {
+  const t = $("#tplTitle").value, s = $("#tplSub").value;
+  for (const r of bulkRows) { r.title = fillTpl(t, r.ep); r.subtitle = fillTpl(s, r.ep); }
+}
+$("#applyTpl").onclick = () => { applyTemplate(); renderBulk(); };
+
+function refreshBulkNumbers() { if (bulkRows.length) renderBulk(); }
+
+function dupSet() {
+  const taken = new Set(currentEps.map((e) => e.ep_number));
+  const seen = new Map();
+  for (const r of bulkRows) seen.set(r.ep, (seen.get(r.ep) || 0) + 1);
+  return (r) => !r.ep || r.ep < 1 || taken.has(r.ep) || seen.get(r.ep) > 1;
+}
+
+function renderBulk() {
+  const tbody = $("#bulkRows");
+  tbody.innerHTML = "";
+  bulkRows.forEach((r, i) => {
+    const tr = document.createElement("tr");
+    r._tr = tr;
+    tr.innerHTML = `
+      <td><div class="fname" title="${esc(r.file.name)}">${esc(r.file.name)}</div><div class="muted">${(r.file.size / 1048576).toFixed(1)} MB</div></td>
+      <td><input class="w-ep" data-k="ep" type="number" min="1" value="${r.ep}"></td>
+      <td><input data-k="title" type="text" value="${esc(r.title)}"></td>
+      <td><input data-k="subtitle" type="text" value="${esc(r.subtitle)}"></td>
+      <td><input class="w-dur" data-k="duration" type="number" min="0" value="${r.duration ?? ""}"></td>
+      <td data-thumb></td>
+      <td data-status class="muted"></td>
+      <td><button class="small" data-rm title="Bỏ khỏi danh sách">✕</button></td>`;
+    tr.querySelectorAll("input[data-k]").forEach((inp) => inp.oninput = () => {
+      const k = inp.dataset.k;
+      r[k] = k === "ep" ? Number(inp.value) : k === "duration" ? (inp.value === "" ? null : Number(inp.value)) : inp.value;
+      if (k === "ep") markDup();
+    });
+    tr.querySelector("[data-rm]").onclick = () => { bulkRows.splice(i, 1); bulkRows.length ? renderBulk() : clearBulk(); };
+    tbody.appendChild(tr);
+    renderBulkRow(r);
+  });
+  markDup();
+}
+
+function renderBulkRow(r) {
+  const tr = r._tr; if (!tr) return;
+  const t = r.thumbFile || r.autoThumb;
+  if (t && !r._thumbUrl) r._thumbUrl = URL.createObjectURL(t);
+  tr.querySelector("[data-thumb]").innerHTML = t ? `<img src="${r._thumbUrl}" alt="" title="${r.thumbFile ? esc(r.thumbFile.name) : "Tự cắt từ video"}">` : `<div class="thumb-ph"></div>`;
+  const dur = tr.querySelector('[data-k="duration"]');
+  if (r.duration != null && dur.value === "") dur.value = r.duration;
+  const st = tr.querySelector("[data-status]");
+  st.textContent = r.status;
+  st.className = r.status.startsWith("✓") ? "st-ok" : r.status.startsWith("✗") ? "st-err" : "muted";
+}
+
+function markDup() {
+  const isBad = dupSet();
+  let bad = 0;
+  for (const r of bulkRows) {
+    const inp = r._tr && r._tr.querySelector('[data-k="ep"]');
+    const b = isBad(r) && !r.status.startsWith("✓");
+    if (b) bad++;
+    if (inp) inp.classList.toggle("bad", b);
+  }
+  $("#bulkMsg").textContent = bad ? `${bad} tập bị trùng số hoặc đã có trên server (ô đỏ) — sửa số tập trước khi upload` : `${bulkRows.length} tập sẵn sàng`;
+  return bad;
+}
+
+function clearBulk() {
+  bulkRows = []; $("#bulkRows").innerHTML = ""; $("#bulkFiles").value = "";
+  $("#bulkPanel").classList.add("hidden"); $("#bulkProg").style.width = "0"; $("#bulkMsg").textContent = "";
+}
+$("#bulkClear").onclick = clearBulk;
+
+$("#bulkStart").onclick = async () => {
+  if (!current || !bulkRows.length) return;
+  if (markDup() && !confirm("Có tập bị trùng số, các tập đó sẽ báo lỗi. Vẫn upload các tập còn lại?")) return;
+  const btn = $("#bulkStart"); btn.disabled = true;
+  const todo = bulkRows.filter((r) => !r.status.startsWith("✓"));
+  let done = 0;
+  for (const r of todo) {
+    const fd = new FormData();
+    fd.append("ep_number", r.ep);
+    fd.append("title", r.title || "");
+    fd.append("subtitle", r.subtitle || "");
+    if (r.duration != null) fd.append("duration", r.duration);
+    fd.append("video", r.file);
+    const thumb = r.thumbFile || r.autoThumb;
+    if (thumb) fd.append("thumb", thumb);
+    r.status = "Đang upload..."; renderBulkRow(r);
+    try {
+      await upload("POST", `/api/admin/movies/${current}/episodes`, fd, (p) => $("#bulkProg").style.width = Math.round((done + p) / todo.length * 100) + "%");
+      r.status = "✓ Xong";
+    } catch (e) { r.status = "✗ " + e.message; }
+    renderBulkRow(r);
+    done++;
+    $("#bulkProg").style.width = Math.round(done / todo.length * 100) + "%";
+  }
+  btn.disabled = false;
+  // tải lại danh sách tập nhưng giữ bảng để xem kết quả
+  const data = await fetch("/api/movies/" + current).then((r) => r.json());
+  currentEps = data.episodes; renderEpisodes(); loadMovies();
+  const fails = bulkRows.filter((r) => r.status.startsWith("✗")).length;
+  $("#bulkMsg").textContent = fails ? `${fails} tập lỗi — sửa rồi bấm Upload tất cả để thử lại các tập lỗi` : "✓ Đã upload xong tất cả";
+};
+
+loadMovies();
+if (TOKEN) $("#saveToken").click();
+</script>
+</body>
+</html>
