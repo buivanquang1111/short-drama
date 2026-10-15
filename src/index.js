@@ -3,6 +3,8 @@
  *
  * Public (app gọi):
  *   GET  /api/movies?page=1&limit=20     danh sách phim (kèm số tập)
+ *   GET  /api/movies/index               toàn bộ phim, chỉ trường gọn (để app tải 1 lần rồi search trên máy), cache 5 phút
+ *   GET  /api/search?q=ten+phim          tìm phim theo tên / tiêu đề phụ (không phân biệt dấu, hoa thường), cache 60 giây
  *   GET  /api/movies/:id                 chi tiết phim + danh sách tập
  *   GET  /api/episodes/:id               chi tiết 1 tập
  *
@@ -60,6 +62,8 @@ async function route(request, env, ctx) {
 
   // Public API
   if (method === "GET" && path === "/api/movies") return listMovies(url, env);
+  if (method === "GET" && path === "/api/movies/index") return cached(request, ctx, 300, () => movieIndex(url, env));
+  if (method === "GET" && path === "/api/search") return cached(request, ctx, 60, () => searchMovies(url, env));
   if (method === "GET" && (m = path.match(/^\/api\/movies\/(\d+)$/))) return getMovie(Number(m[1]), url, env);
   if (method === "GET" && (m = path.match(/^\/api\/episodes\/(\d+)$/))) return getEpisode(Number(m[1]), url, env);
 
@@ -93,12 +97,7 @@ async function listMovies(url, env) {
   const offset = (page - 1) * limit;
 
   const [{ results }, totalRow] = await Promise.all([
-    env.DB.prepare(
-      `SELECT m.*, (SELECT COUNT(*) FROM episodes e WHERE e.movie_id = m.id) AS episode_count
-         FROM movies m
-        ORDER BY m.id DESC
-        LIMIT ?1 OFFSET ?2`
-    ).bind(limit, offset).all(),
+    env.DB.prepare("SELECT * FROM movies ORDER BY id DESC LIMIT ?1 OFFSET ?2").bind(limit, offset).all(),
     env.DB.prepare("SELECT COUNT(*) AS total FROM movies").first(),
   ]);
 
@@ -123,6 +122,94 @@ async function getMovie(id, url, env) {
     movie: { ...movieDto(movie, base), episode_count: results.length },
     episodes: results.map((e) => episodeDto(e, base)),
   });
+}
+
+/** Toàn bộ phim, chỉ trường cần cho danh sách + search trên máy. Đọc đúng số dòng = số phim. */
+async function movieIndex(url, env) {
+  const { results } = await env.DB.prepare(
+    "SELECT id, title, subtitle, poster_key, episode_count FROM movies ORDER BY id DESC"
+  ).all();
+  const base = mediaBase(url, env);
+  return json({
+    total: results.length,
+    movies: results.map((r) => ({
+      id: r.id,
+      title: r.title,
+      subtitle: r.subtitle,
+      poster: keyToUrl(r.poster_key, base),
+      episode_count: r.episode_count,
+    })),
+  });
+}
+
+/**
+ * Tìm phim theo tên/tiêu đề phụ. Không phân biệt dấu và hoa thường:
+ * "tinh yeu" khớp "Tình Yêu". Mọi từ trong q đều phải xuất hiện.
+ * Số phim nhỏ (vài trăm) nên lọc trong Worker; D1 chỉ đọc 1 dòng / phim.
+ */
+async function searchMovies(url, env) {
+  const q = normalizeText(url.searchParams.get("q"));
+  const limit = clampInt(url.searchParams.get("limit"), 1, 50, 20);
+  if (q.length < 1) return json({ q: "", total: 0, movies: [] });
+  const words = q.split(" ");
+
+  const { results } = await env.DB.prepare(
+    "SELECT id, title, subtitle, description, poster_key, episode_count, created_at FROM movies"
+  ).all();
+
+  const scored = [];
+  for (const r of results) {
+    const t = normalizeText(r.title);
+    const hay = `${t} ${normalizeText(r.subtitle)}`;
+    if (!words.every((w) => hay.includes(w))) continue;
+    const score = t === q ? 0 : t.startsWith(q) ? 1 : t.includes(q) ? 2 : 3;
+    scored.push({ r, score });
+  }
+  scored.sort((a, b) => a.score - b.score || b.r.id - a.r.id);
+
+  const base = mediaBase(url, env);
+  return json({
+    q: url.searchParams.get("q"),
+    total: scored.length,
+    movies: scored.slice(0, limit).map(({ r }) => movieDto(r, base)),
+  });
+}
+
+/** Bỏ dấu tiếng Việt, về chữ thường, gộp khoảng trắng. */
+function normalizeText(s) {
+  return String(s ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/**
+ * Cache response ở edge (Cache API). Chỉ có tác dụng khi Worker chạy trên custom domain
+ * (vd api.tenmien.com); trên *.workers.dev cache bị bỏ qua nhưng API vẫn chạy bình thường.
+ * Header cache-control giúp HTTP client của app (OkHttp, Dio...) cũng cache được.
+ */
+async function cached(request, ctx, ttl, build) {
+  const key = new Request(new URL(request.url).toString(), { method: "GET" });
+  let cache = null;
+  try { cache = caches.default; } catch {}
+  if (cache) {
+    const hit = await cache.match(key).catch(() => null);
+    if (hit) return hit;
+  }
+  const res = await build();
+  res.headers.set("cache-control", `public, max-age=${ttl}`);
+  if (cache && res.status === 200) ctx.waitUntil(cache.put(key, res.clone()).catch(() => {}));
+  return res;
+}
+
+/** Cập nhật lại số tập của phim sau khi thêm/xoá tập. */
+async function refreshEpisodeCount(env, movieId) {
+  await env.DB.prepare(
+    "UPDATE movies SET episode_count = (SELECT COUNT(*) FROM episodes WHERE movie_id = ?1) WHERE id = ?1"
+  ).bind(movieId).run();
 }
 
 async function getEpisode(id, url, env) {
@@ -221,6 +308,7 @@ async function createEpisode(movieId, request, url, env) {
       `INSERT INTO episodes (movie_id, ep_number, title, subtitle, thumb_key, video_key, duration)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING *`
     ).bind(movieId, epNumber, title, str(form.get("subtitle")), thumbKey, videoKey, intOrNull(form.get("duration"))).first();
+    await refreshEpisodeCount(env, movieId);
     return json({ episode: episodeDto(row, mediaBase(url, env)) }, 201);
   } catch (err) {
     // Ghi DB lỗi thì dọn file vừa upload để không rác R2
@@ -282,6 +370,7 @@ async function deleteEpisode(id, env) {
   const ep = await env.DB.prepare("SELECT * FROM episodes WHERE id = ?1").bind(id).first();
   if (!ep) throw new HttpError(404, "Episode not found");
   await env.DB.prepare("DELETE FROM episodes WHERE id = ?1").bind(id).run();
+  await refreshEpisodeCount(env, ep.movie_id);
   await deleteKeys(env, [ep.video_key, ep.thumb_key]);
   return json({ deleted: true });
 }
@@ -355,7 +444,9 @@ function episodeDto(e, base) {
 }
 
 function mediaBase(url, env) {
-  const configured = (env.MEDIA_BASE_URL || "").trim().replace(/\/+$/, "");
+  let configured = (env.MEDIA_BASE_URL || "").trim().replace(/\/+$/, "");
+  // "cdn.tenmien.com" (thiếu scheme) => "https://cdn.tenmien.com"
+  if (configured && !/^https?:\/\//i.test(configured)) configured = `https://${configured.replace(/^\/+/, "")}`;
   return configured ? `${configured}/` : `${url.origin}/media/`;
 }
 
