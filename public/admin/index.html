@@ -20,7 +20,7 @@
   .card h2 { font-size:14px; margin:0 0 10px; }
   label { display:block; font-size:12px; color:var(--muted); margin:8px 0 3px; }
   label.inline { display:inline-flex; align-items:center; gap:6px; margin:0; color:var(--text); font-size:13px; }
-  input[type=text], input[type=number], input[type=password], textarea, select { width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:transparent; color:var(--text); font:inherit; }
+  input[type=text], input[type=number], input[type=password], textarea { width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:transparent; color:var(--text); font:inherit; }
   textarea { min-height:60px; resize:vertical; }
   button { padding:7px 12px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); cursor:pointer; font:inherit; white-space:nowrap; }
   button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
@@ -33,15 +33,13 @@
   .movie:hover, .movie.active { background:color-mix(in srgb, var(--accent) 12%, transparent); }
   .movie img, .ph { width:40px; height:56px; object-fit:cover; border-radius:4px; background:var(--line); flex:none; }
   .muted { color:var(--muted); font-size:12px; }
+  .tag { display:inline-block; padding:1px 7px; margin:2px 4px 0 0; border-radius:10px; background:var(--line, #e5e7eb); font-size:11px; }
   .table-wrap { overflow-x:auto; }
   table { width:100%; border-collapse:collapse; }
   th, td { text-align:left; padding:6px 6px; border-bottom:1px solid var(--line); vertical-align:middle; }
   th { font-size:12px; color:var(--muted); font-weight:600; }
   td img, .thumb-ph { width:72px; height:40px; object-fit:cover; border-radius:4px; background:var(--line); display:block; }
-  td input[type=text], td input[type=number] { padding:5px 7px; }
-  .w-ep { width:70px; } .w-dur { width:90px; }
-  .fname { max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
-  .bad { border-color:var(--danger) !important; }
+  .fname { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .st-ok { color:var(--ok); } .st-err { color:var(--danger); }
   .progress { height:6px; background:var(--line); border-radius:3px; overflow:hidden; margin-top:10px; }
   .progress > div { height:100%; width:0; background:var(--accent); transition:width .1s; }
@@ -49,7 +47,7 @@
   a { color:var(--accent); }
   code { font-size:12px; }
   .edit-row td { background:color-mix(in srgb, var(--accent) 6%, transparent); }
-  .preview-thumb { width:120px; height:68px; object-fit:cover; border-radius:6px; background:var(--line); display:block; margin-top:6px; }
+  .poster-prev { width:60px; height:84px; object-fit:cover; border-radius:6px; background:var(--line); }
 </style>
 </head>
 <body>
@@ -64,67 +62,87 @@
   <!-- ============ CỘT TRÁI ============ -->
   <section>
     <div class="card">
-      <h2>Đồng bộ từ Google Sheet</h2>
-      <div class="muted">Mỗi tab trong Sheet là 1 bộ phim. Sheet có bao nhiêu tập thì server có bấy nhiêu tập; video có trong thư mục thì upload, thiếu thì bổ sung lần sau.</div>
-      <label>Link Apps Script (…/exec)</label>
-      <input id="sheetUrl" type="text" placeholder="https://script.google.com/macros/s/.../exec">
-      <div class="row" style="margin-top:8px"><button id="sheetLoad" class="small">Tải sheet</button><span id="sheetMsg" class="muted"></span></div>
-      <label>Phim (tab trong Sheet)</label>
-      <select id="sheetTab"><option value="">— Bấm "Tải sheet" trước —</option></select>
-      <label>Thư mục video của phim (tuỳ chọn)</label>
-      <input id="syncFolder" type="file" webkitdirectory multiple>
-      <div class="row" style="margin-top:10px"><button id="syncPrepare" class="primary">Xem đối chiếu</button></div>
+      <h2>Upload phim từ thư mục</h2>
+      <div class="muted">
+        Chọn thư mục của 1 bộ phim. Số tập lấy từ số trong tên file video (<code>ep_01.mp4</code>, <code>tap 5.mp4</code>, <code>05.mp4</code>).
+        Ảnh <code>poster.jpg</code> dùng làm poster; ảnh cùng tên với video dùng làm thumbnail, không có thì tự cắt từ video.
+        Chọn lại thư mục bất kỳ lúc nào: chỉ upload tập còn thiếu.
+      </div>
+      <div class="row" style="margin-top:10px"><input id="folderInput" type="file" webkitdirectory multiple></div>
     </div>
+
     <div class="card">
-      <h2>Tạo phim mới</h2>
+      <div class="row" style="justify-content:space-between"><h2 style="margin:0">Danh sách phim</h2><button id="reload" class="small">Tải lại</button></div>
+      <div id="movies" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card">
+      <h2>Tạo phim trống</h2>
       <form id="movieForm">
         <label>Tên phim *</label><input name="title" type="text" required>
-        <label>Tiêu đề phụ</label><input name="subtitle" type="text">
+        <label>Tag (cách nhau bằng dấu phẩy)</label><input name="tags" type="text" placeholder="Ngôn tình, Tổng tài, Báo thù">
         <label>Mô tả</label><textarea name="description"></textarea>
         <label>Poster (jpg/png/webp)</label><input name="poster" type="file" accept="image/*">
         <div class="row" style="margin-top:10px"><button class="primary" type="submit">Tạo phim</button></div>
       </form>
     </div>
-    <div class="card">
-      <div class="row" style="justify-content:space-between"><h2 style="margin:0">Danh sách phim</h2><button id="reload" class="small">Tải lại</button></div>
-      <div id="movies" style="margin-top:8px"></div>
-    </div>
   </section>
 
   <!-- ============ CỘT PHẢI ============ -->
   <section>
-    <div id="syncPanel" class="card hidden" style="margin-bottom:16px">
-      <div class="row" style="justify-content:space-between">
-        <div><h2 id="syncTitle" style="margin:0"></h2><div id="syncSub" class="muted"></div></div>
-        <div class="row"><button id="syncRefresh" class="small">Đối chiếu lại</button><button id="syncClose" class="small">Đóng</button></div>
+    <!-- Xem trước upload thư mục -->
+    <div id="folderPanel" class="card hidden" style="margin-bottom:16px">
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <div class="row" style="align-items:flex-start">
+          <img id="fpPoster" class="poster-prev hidden" alt="">
+          <div>
+            <h2 id="fpTitle" style="margin:0"></h2>
+            <div id="fpSub" class="muted"></div>
+          </div>
+        </div>
+        <button id="fpClose" class="small">Đóng</button>
       </div>
-      <div id="syncSummary" style="margin-top:8px"></div>
+
+      <div id="fpNewInfo" class="hidden">
+        <div class="row">
+          <div class="grow"><label>Tên phim *</label><input id="fpName" type="text"></div>
+          <div class="grow"><label>Tag (cách nhau bằng dấu phẩy)</label><input id="fpTags" type="text" placeholder="Ngôn tình, Tổng tài, Báo thù"></div>
+        </div>
+        <label>Mô tả</label><textarea id="fpDesc"></textarea>
+      </div>
+
+      <div id="fpSummary" style="margin-top:10px"></div>
       <div class="row" style="margin-top:8px">
-        <label class="inline"><input type="checkbox" id="syncReplaceAll"> Ghi đè video đã có trên server bằng video trong thư mục</label>
+        <label class="inline"><input type="checkbox" id="fpReplaceAll"> Ghi đè video đã có trên server bằng video trong thư mục</label>
       </div>
       <div class="table-wrap" style="margin-top:10px">
         <table>
-          <thead><tr><th>Tập</th><th>Tiêu đề</th><th>Tiêu đề phụ</th><th>Video trong thư mục</th><th>Trên server</th><th>Việc sẽ làm</th><th>Kết quả</th></tr></thead>
-          <tbody id="syncRows"></tbody>
+          <thead><tr><th>Tập</th><th>File video</th><th>Thumbnail</th><th>Trên server</th><th>Việc sẽ làm</th><th>Kết quả</th></tr></thead>
+          <tbody id="fpRows"></tbody>
         </table>
       </div>
-      <div id="syncExtra" class="muted" style="margin-top:8px"></div>
-      <div class="row" style="margin-top:10px"><button id="syncRun" class="primary">Đồng bộ</button><span id="syncMsg" class="muted"></span></div>
-      <div class="progress"><div id="syncProg"></div></div>
+      <div id="fpExtra" class="muted" style="margin-top:8px"></div>
+      <div class="row" style="margin-top:10px"><button id="fpRun" class="primary">Upload</button><span id="fpMsg" class="muted"></span></div>
+      <div class="progress"><div id="fpProg"></div></div>
     </div>
 
-    <div id="empty" class="card muted">Chọn một phim bên trái để quản lý tập.</div>
+    <div id="empty" class="card muted">Chọn thư mục phim để upload, hoặc chọn một phim bên trái để xem các tập.</div>
 
+    <!-- Chi tiết phim -->
     <div id="detail" class="hidden">
-      <!-- Thông tin phim -->
       <div class="card">
         <div class="row" style="justify-content:space-between">
-          <div>
-            <h2 id="dTitle" style="margin:0"></h2>
-            <div id="dSub" class="muted"></div>
+          <div class="row">
+            <img id="dPoster" class="poster-prev hidden" alt="">
+            <div>
+              <h2 id="dTitle" style="margin:0"></h2>
+              <div id="dSub" class="muted"></div><div id="dTags"></div>
+            </div>
           </div>
           <div class="row">
             <a id="dJson" target="_blank">Xem JSON</a>
+            <button class="small" id="dAddFolderBtn" type="button">Thêm video từ thư mục</button>
+            <input id="dFolder" type="file" webkitdirectory multiple class="hidden">
             <button id="dEdit" class="small">Sửa phim</button>
             <button id="dDelete" class="small danger">Xoá phim</button>
           </div>
@@ -132,7 +150,7 @@
         <form id="movieEdit" class="hidden" style="margin-top:10px">
           <div class="row">
             <div class="grow"><label>Tên phim *</label><input name="title" type="text" required></div>
-            <div class="grow"><label>Tiêu đề phụ</label><input name="subtitle" type="text"></div>
+            <div class="grow"><label>Tag (cách nhau bằng dấu phẩy)</label><input name="tags" type="text" placeholder="Ngôn tình, Tổng tài, Báo thù"></div>
           </div>
           <label>Mô tả</label><textarea name="description"></textarea>
           <label>Đổi poster</label><input name="poster" type="file" accept="image/*">
@@ -140,68 +158,11 @@
         </form>
       </div>
 
-      <!-- Thêm 1 tập -->
-      <div class="card">
-        <h2>Thêm 1 tập</h2>
-        <form id="epForm">
-          <div class="row">
-            <div style="width:90px"><label>Tập số *</label><input name="ep_number" type="number" min="1" required></div>
-            <div class="grow"><label>Tiêu đề</label><input name="title" type="text" placeholder="Để trống = Tập N"></div>
-            <div class="grow"><label>Tiêu đề phụ</label><input name="subtitle" type="text"></div>
-            <div style="width:120px"><label>Thời lượng (giây)</label><input name="duration" type="number" min="0" placeholder="Tự lấy"></div>
-          </div>
-          <div class="row" style="align-items:flex-start">
-            <div class="grow"><label>Video *</label><input name="video" type="file" accept="video/*" required></div>
-            <div class="grow">
-              <label>Thumbnail <span class="muted">(bỏ trống = tự cắt từ video)</span></label>
-              <input name="thumb" type="file" accept="image/*">
-              <img id="epThumbPreview" class="preview-thumb hidden" alt="">
-            </div>
-          </div>
-          <div class="row" style="margin-top:10px"><button class="primary" type="submit">Upload tập</button><span id="epFormMsg" class="muted"></span></div>
-          <div class="progress"><div id="epProg"></div></div>
-        </form>
-      </div>
-
-      <!-- Thêm nhiều tập -->
-      <div class="card">
-        <h2>Thêm nhiều tập cùng lúc</h2>
-        <div class="muted">
-          Chọn nhiều file video (có thể chọn kèm ảnh thumbnail), hoặc chọn cả thư mục. Danh sách hiện ra để bạn kiểm tra và sửa trước khi upload. Muốn lấy tiêu đề từ Google Sheet thì dùng mục <b>Đồng bộ từ Google Sheet</b>.<br>
-          Số tập: nếu tên file có số (<code>ep_05.mp4</code>, <code>tap5.mp4</code>) thì lấy số cuối cùng; nếu không có số thì đánh tiếp theo thứ tự tên file.
-          Ảnh có cùng số tập hoặc cùng tên với video được dùng làm thumbnail; không có ảnh thì tự cắt 1 khung hình từ video.
-        </div>
-        <div class="row" style="margin-top:10px">
-          <label class="inline">Chọn file: <input id="bulkFiles" type="file" multiple accept="video/*,image/*"></label>
-          <label class="inline">hoặc thư mục: <input id="bulkFolder" type="file" webkitdirectory multiple></label>
-        </div>
-        <div id="bulkPanel" class="hidden">
-          <div class="row" style="margin-top:12px">
-            <div class="grow"><label>Tiêu đề mẫu (<code>{n}</code> = số tập)</label><input id="tplTitle" type="text" value="Tập {n}"></div>
-            <div class="grow"><label>Tiêu đề phụ mẫu (tuỳ chọn)</label><input id="tplSub" type="text" placeholder="vd: Tên phim - tập {n}"></div>
-            <div style="padding-top:22px"><button id="applyTpl" class="small">Áp dụng mẫu</button></div>
-          </div>
-          <div class="table-wrap" style="margin-top:10px">
-            <table>
-              <thead><tr><th>File</th><th>Tập</th><th>Tiêu đề</th><th>Tiêu đề phụ</th><th>Thời lượng (s)</th><th>Thumb</th><th>Trạng thái</th><th></th></tr></thead>
-              <tbody id="bulkRows"></tbody>
-            </table>
-          </div>
-          <div class="row" style="margin-top:10px">
-            <button id="bulkStart" class="primary">Upload tất cả</button>
-            <button id="bulkClear" class="small">Xoá danh sách</button>
-            <span id="bulkMsg" class="muted"></span>
-          </div>
-          <div class="progress"><div id="bulkProg"></div></div>
-        </div>
-      </div>
-
-      <!-- Danh sách tập -->
       <div class="card">
         <h2>Các tập (<span id="epCount">0</span>)</h2>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>#</th><th>Thumb</th><th>Tiêu đề</th><th>Thời lượng</th><th>Video</th><th></th></tr></thead>
+            <thead><tr><th>Tập</th><th>Thumb</th><th>Thời lượng</th><th>Video</th><th></th></tr></thead>
             <tbody id="episodes"></tbody>
           </table>
         </div>
@@ -217,9 +178,9 @@ try { TOKEN = localStorage.getItem("admin_token") || ""; } catch {}
 $("#token").value = TOKEN;
 
 let current = null;        // id phim đang mở
-let currentMovie = null;   // dữ liệu phim đang mở
-let currentEps = [];       // các tập của phim đang mở
-let bulkRows = [];         // danh sách chờ upload hàng loạt
+let currentMovie = null;
+let currentEps = [];
+let plan = null;           // kế hoạch upload thư mục đang xem trước
 
 // ------------------------------------------------------------------ API helpers
 async function api(path, opts = {}) {
@@ -253,8 +214,23 @@ function stem(name) { return name.replace(/\.[^.]+$/, ""); }
 function lastNumber(name) { const m = stem(name).match(/\d+/g); return m ? Number(m[m.length - 1]) : null; }
 function isVideo(f) { return f.type.startsWith("video/") || /\.(mp4|m4v|mov|webm)$/i.test(f.name); }
 function isImage(f) { return f.type.startsWith("image/") || /\.(jpe?g|png|webp)$/i.test(f.name); }
-function fillTpl(tpl, n) { return (tpl || "").replaceAll("{n}", n ?? ""); }
+const isPoster = (f) => /^(poster|cover|bia)$/i.test(stem(f.name));
 const natural = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+/** Bỏ dấu tiếng Việt, chữ thường — để so tên phim. */
+const plain = (s) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/đ/gi, "d").toLowerCase().trim();
+
+/** Bỏ file ẩn (.DS_Store...) và file nằm trong thư mục con. */
+function topLevelFiles(fileList) {
+  const files = [...fileList].filter((f) => !f.name.startsWith("."));
+  if (!files.length) return [];
+  const depth = (f) => (f.webkitRelativePath || f.name).split("/").length;
+  const min = Math.min(...files.map(depth));
+  return files.filter((f) => depth(f) === min);
+}
+function folderName(fileList) {
+  const p = [...fileList][0]?.webkitRelativePath || "";
+  return p.includes("/") ? p.split("/")[0] : "";
+}
 
 /**
  * Đọc thời lượng + cắt 1 khung hình làm thumbnail ngay trên trình duyệt.
@@ -294,19 +270,23 @@ $("#saveToken").onclick = async () => {
   catch (e) { $("#authState").textContent = "✗ " + e.message; }
 };
 
-// ------------------------------------------------------------------ movies
+// ------------------------------------------------------------------ danh sách phim
+function tagHtml(tags) {
+  return (tags || []).length ? `<div>${tags.map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</div>` : "";
+}
+
 async function loadMovies() {
   const data = await fetch("/api/movies?limit=100").then((r) => r.json());
-  $("#movies").innerHTML = data.movies.map((m) => `
+  $("#movies").innerHTML = (data.movies || []).map((m) => `
     <div class="movie ${current === m.id ? "active" : ""}" data-id="${m.id}">
       ${m.poster ? `<img src="${esc(m.poster)}" loading="lazy" alt="">` : `<div class="ph"></div>`}
-      <div><div>${esc(m.title)}</div><div class="muted">#${m.id} · ${m.episode_count} tập</div></div>
+      <div><div>${esc(m.title)}</div><div class="muted">#${m.id} · ${m.episode_count} tập</div>${tagHtml(m.tags)}</div>
     </div>`).join("") || `<div class="muted">Chưa có phim nào.</div>`;
   document.querySelectorAll(".movie").forEach((el) => el.onclick = () => openMovie(Number(el.dataset.id)));
 }
+$("#reload").onclick = loadMovies;
 
 async function openMovie(id) {
-  if (current !== id) clearBulk();
   current = id;
   const data = await fetch("/api/movies/" + id).then((r) => r.json());
   currentMovie = data.movie;
@@ -315,18 +295,17 @@ async function openMovie(id) {
   $("#detail").classList.remove("hidden");
   $("#movieEdit").classList.add("hidden");
   $("#dTitle").textContent = data.movie.title;
-  $("#dSub").textContent = data.movie.subtitle || "";
+  const missing = currentEps.filter((e) => !e.video_url).length;
+  $("#dTags").innerHTML = tagHtml(data.movie.tags);
+  $("#dSub").textContent = [`${currentEps.length} tập`, missing ? `${missing} tập chưa có video` : ""].filter(Boolean).join(" · ");
+  $("#dPoster").classList.toggle("hidden", !data.movie.poster);
+  if (data.movie.poster) $("#dPoster").src = data.movie.poster;
   $("#dJson").href = "/api/movies/" + id;
   renderEpisodes();
-  $("#epForm").ep_number.value = maxEp() + 1;
-  refreshBulkNumbers();
   loadMovies();
 }
 
-function maxEp() { return currentEps.reduce((mx, e) => Math.max(mx, e.ep_number), 0); }
-
-$("#reload").onclick = loadMovies;
-
+// ------------------------------------------------------------------ tạo / sửa / xoá phim
 $("#movieForm").onsubmit = async (ev) => {
   ev.preventDefault();
   const btn = ev.target.querySelector("button"); btn.disabled = true;
@@ -341,7 +320,7 @@ $("#movieForm").onsubmit = async (ev) => {
 $("#dEdit").onclick = () => {
   const f = $("#movieEdit");
   f.title.value = currentMovie.title || "";
-  f.subtitle.value = currentMovie.subtitle || "";
+  f.tags.value = (currentMovie.tags || []).join(", ");
   f.description.value = currentMovie.description || "";
   f.poster.value = "";
   f.classList.remove("hidden");
@@ -350,7 +329,7 @@ $("#dEditCancel").onclick = () => $("#movieEdit").classList.add("hidden");
 $("#movieEdit").onsubmit = async (ev) => {
   ev.preventDefault();
   const f = ev.target, fd = new FormData();
-  fd.append("title", f.title.value); fd.append("subtitle", f.subtitle.value); fd.append("description", f.description.value);
+  fd.append("title", f.title.value); fd.append("tags", f.tags.value); fd.append("description", f.description.value);
   if (f.poster.files[0]) fd.append("poster", f.poster.files[0]);
   try { await upload("PATCH", "/api/admin/movies/" + current, fd); await openMovie(current); }
   catch (e) { alert(e.message); }
@@ -360,24 +339,23 @@ $("#dDelete").onclick = async () => {
   if (!current || !confirm("Xoá phim này cùng TOÀN BỘ tập và file video?")) return;
   try {
     await api("/api/admin/movies/" + current, { method: "DELETE" });
-    current = null; clearBulk();
+    current = null;
     $("#detail").classList.add("hidden"); $("#empty").classList.remove("hidden");
     loadMovies();
   } catch (e) { alert(e.message); }
 };
 
-// ------------------------------------------------------------------ episode list + inline edit
+// ------------------------------------------------------------------ danh sách tập
 function renderEpisodes() {
   $("#epCount").textContent = currentEps.length;
   $("#episodes").innerHTML = currentEps.map((e) => `
     <tr data-id="${e.id}">
       <td>${e.ep_number}</td>
       <td>${e.thumb ? `<img src="${esc(e.thumb)}" loading="lazy" alt="">` : `<div class="thumb-ph"></div>`}</td>
-      <td>${esc(e.title)}<div class="muted">${esc(e.subtitle || "")}</div></td>
       <td>${fmtDur(e.duration)}</td>
       <td>${e.video_url ? `<a href="${esc(e.video_url)}" target="_blank">Mở</a>` : `<span class="st-err">Chưa có video</span>`}</td>
       <td><div class="row"><button class="small" data-edit="${e.id}">Sửa</button><button class="small danger" data-del="${e.id}">Xoá</button></div></td>
-    </tr>`).join("");
+    </tr>`).join("") || `<tr><td colspan="5" class="muted">Chưa có tập nào.</td></tr>`;
   document.querySelectorAll("[data-del]").forEach((b) => b.onclick = async () => {
     if (!confirm("Xoá tập này?")) return;
     try { await api("/api/admin/episodes/" + b.dataset.del, { method: "DELETE" }); openMovie(current); }
@@ -392,14 +370,10 @@ function openEdit(id) {
   const tr = document.querySelector(`#episodes tr[data-id="${id}"]`);
   const row = document.createElement("tr");
   row.className = "edit-row";
-  row.innerHTML = `<td colspan="6">
+  row.innerHTML = `<td colspan="5">
     <div class="row">
-      <div style="width:80px"><label>Tập số</label><input data-f="ep_number" type="number" min="1" value="${ep.ep_number}"></div>
-      <div class="grow"><label>Tiêu đề</label><input data-f="title" type="text" value="${esc(ep.title)}"></div>
-      <div class="grow"><label>Tiêu đề phụ</label><input data-f="subtitle" type="text" value="${esc(ep.subtitle || "")}"></div>
-      <div style="width:120px"><label>Thời lượng (giây)</label><input data-f="duration" type="number" min="0" value="${ep.duration ?? ""}"></div>
-    </div>
-    <div class="row">
+      <div style="width:90px"><label>Tập số</label><input data-f="ep_number" type="number" min="1" value="${ep.ep_number}"></div>
+      <div style="width:130px"><label>Thời lượng (giây)</label><input data-f="duration" type="number" min="0" value="${ep.duration ?? ""}"></div>
       <div class="grow"><label>Thay video</label><input data-f="video" type="file" accept="video/*"></div>
       <div class="grow"><label>Thay thumbnail</label><input data-f="thumb" type="file" accept="image/*"></div>
     </div>
@@ -407,7 +381,6 @@ function openEdit(id) {
   </td>`;
   tr.after(row);
   const get = (f) => row.querySelector(`[data-f="${f}"]`);
-  // thay video mới => tự cập nhật thời lượng
   get("video").onchange = async () => {
     const f = get("video").files[0]; if (!f) return;
     const { duration } = await probeVideo(f, false);
@@ -419,8 +392,6 @@ function openEdit(id) {
     const fd = new FormData();
     const n = Number(get("ep_number").value);
     if (n && n !== ep.ep_number) fd.append("ep_number", n);
-    fd.append("title", get("title").value);
-    fd.append("subtitle", get("subtitle").value);
     fd.append("duration", get("duration").value);
     if (get("video").files[0]) fd.append("video", get("video").files[0]);
     if (get("thumb").files[0]) fd.append("thumb", get("thumb").files[0]);
@@ -431,443 +402,172 @@ function openEdit(id) {
   };
 }
 
-// ------------------------------------------------------------------ thêm 1 tập
-const epForm = $("#epForm");
-epForm.video.onchange = async () => {
-  const f = epForm.video.files[0];
-  $("#epThumbPreview").classList.add("hidden");
-  if (!f) return;
-  $("#epFormMsg").textContent = "Đang đọc video...";
-  const { duration, thumb } = await probeVideo(f, true);
-  if (duration != null && !epForm.duration.value) epForm.duration.value = duration;
-  epForm._autoThumb = thumb;
-  if (thumb && !epForm.thumb.files[0]) { $("#epThumbPreview").src = URL.createObjectURL(thumb); $("#epThumbPreview").classList.remove("hidden"); }
-  $("#epFormMsg").textContent = thumb ? "Đã tự cắt thumbnail từ video" : "";
+// ------------------------------------------------------------------ upload theo thư mục
+$("#folderInput").onchange = () => {
+  const list = $("#folderInput").files;
+  if (list.length) preparePlan(topLevelFiles(list), { name: folderName(list) });
 };
-epForm.thumb.onchange = () => {
-  const f = epForm.thumb.files[0];
-  if (f) { $("#epThumbPreview").src = URL.createObjectURL(f); $("#epThumbPreview").classList.remove("hidden"); }
+$("#dAddFolderBtn").onclick = () => $("#dFolder").click();
+$("#dFolder").onchange = () => {
+  const list = $("#dFolder").files;
+  if (list.length && current) preparePlan(topLevelFiles(list), { movieId: current, name: folderName(list) });
 };
-epForm.onsubmit = async (ev) => {
-  ev.preventDefault();
-  if (!current) return;
-  const btn = epForm.querySelector("button[type=submit]"); btn.disabled = true;
-  const fd = new FormData(epForm);
-  if (!epForm.thumb.files[0]) { fd.delete("thumb"); if (epForm._autoThumb) fd.append("thumb", epForm._autoThumb); }
-  try {
-    await upload("POST", `/api/admin/movies/${current}/episodes`, fd, (p) => $("#epProg").style.width = Math.round(p * 100) + "%");
-    epForm.reset(); epForm._autoThumb = null; $("#epProg").style.width = "0";
-    $("#epThumbPreview").classList.add("hidden"); $("#epFormMsg").textContent = "✓ Đã upload";
-    await openMovie(current);
-  } catch (e) { alert(e.message); }
-  btn.disabled = false;
-};
+$("#fpClose").onclick = () => { $("#folderPanel").classList.add("hidden"); plan = null; $("#folderInput").value = ""; $("#dFolder").value = ""; };
+$("#fpReplaceAll").onchange = () => plan && renderPlan();
+$("#fpName").oninput = () => plan && !plan.movie && renderPlan();
 
-// ------------------------------------------------------------------ tiện ích dùng chung
-/** Bỏ dấu tiếng Việt, chữ thường — để so tên cột / tên phim. */
-const plain = (s) => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/gi, "d").toLowerCase().trim();
-
-/** Bỏ file ẩn (.DS_Store...) và file nằm trong thư mục con khi chọn cả thư mục. */
-function topLevelFiles(fileList) {
-  const files = [...fileList].filter((f) => !f.name.startsWith("."));
-  const depth = (f) => (f.webkitRelativePath || f.name).split("/").length;
-  const min = Math.min(...files.map(depth));
-  return files.filter((f) => depth(f) === min);
-}
-const isPoster = (f) => /^(poster|cover|bia)$/i.test(stem(f.name));
-
-// ------------------------------------------------------------------ thêm nhiều tập
 /**
- * Ghép video + ảnh, đánh số tập.
- * - Có số trong tên file => dùng số cuối cùng.
- * - Không có số => đánh tiếp sau số lớn nhất (đã có trên server và trong danh sách), theo thứ tự tên file.
- * - Ảnh khớp video nếu cùng tên (bỏ đuôi) hoặc cùng số tập.
+ * Ghép file trong thư mục thành danh sách tập:
+ * - Số tập = số cuối cùng trong tên file video.
+ * - Thumbnail = ảnh cùng tên với video, hoặc ảnh có cùng số tập. poster.jpg = poster phim.
  */
-function buildRows(files, existingMax) {
+function scanFolder(files) {
   const videos = files.filter(isVideo).sort((a, b) => natural.compare(a.name, b.name));
   const images = files.filter((f) => !isVideo(f) && isImage(f) && !isPoster(f));
-  const byStem = new Map(images.map((f) => [stem(f.name).toLowerCase(), f]));
-  const byNum = new Map();
-  for (const f of images) { const n = lastNumber(f.name); if (n != null && !byNum.has(n)) byNum.set(n, f); }
+  const imgByStem = new Map(images.map((f) => [stem(f.name).toLowerCase(), f]));
+  const imgByNum = new Map();
+  for (const f of images) { const n = lastNumber(f.name); if (n != null && !imgByNum.has(n)) imgByNum.set(n, f); }
 
-  const rows = videos.map((f) => ({ file: f, ep: lastNumber(f.name), fromName: lastNumber(f.name) != null }));
-  let next = Math.max(existingMax, ...rows.filter((r) => r.fromName).map((r) => r.ep), 0) + 1;
-  for (const r of rows) if (r.ep == null) r.ep = next++;
-  for (const r of rows) {
-    r.thumbFile = byStem.get(stem(r.file.name).toLowerCase()) || (r.fromName ? byNum.get(r.ep) : null) || null;
-    r.autoThumb = null; r.duration = null; r.subtitle = ""; r.status = ""; r.title = "";
+  const byEp = new Map(), noNumber = [], duplicates = [];
+  // trùng số tập: giữ file tên ngắn nhất (thường là bản gốc, không phải "... (copy)")
+  const ordered = [...videos].sort((a, b) => a.name.length - b.name.length || natural.compare(a.name, b.name));
+  for (const f of ordered) {
+    const ep = lastNumber(f.name);
+    if (ep == null || ep < 1) { noNumber.push(f); continue; }
+    if (byEp.has(ep)) { duplicates.push(f); continue; }
+    byEp.set(ep, { ep, video: f, thumb: imgByStem.get(stem(f.name).toLowerCase()) || imgByNum.get(ep) || null });
   }
-  return rows.sort((a, b) => a.ep - b.ep);
+  return {
+    rows: [...byEp.values()].sort((a, b) => a.ep - b.ep),
+    poster: files.find((f) => isImage(f) && isPoster(f)) || null,
+    noNumber, duplicates,
+  };
 }
 
-$("#bulkFiles").onchange = () => loadBulk([...$("#bulkFiles").files].filter((f) => !f.name.startsWith(".")));
-$("#bulkFolder").onchange = () => loadBulk(topLevelFiles($("#bulkFolder").files));
+async function preparePlan(files, { name, movieId, afterUpload }) {
+  const scan = scanFolder(files);
+  if (!scan.rows.length && !scan.noNumber.length) { alert("Thư mục không có video nào"); return; }
 
-async function loadBulk(files) {
-  if (!files.length) return;
-  bulkRows = buildRows(files, maxEp());
-  if (!bulkRows.length) { alert("Chưa chọn file video nào"); return; }
-  applyTemplate();
-  $("#bulkPanel").classList.remove("hidden");
-  renderBulk();
-  // đọc thời lượng + tự cắt thumb lần lượt (tránh mở quá nhiều video cùng lúc)
-  for (const r of bulkRows) {
-    r.status = "Đang đọc...";
-    renderBulkRow(r);
-    const { duration, thumb } = await probeVideo(r.file, !r.thumbFile);
-    if (!bulkRows.includes(r)) continue; // danh sách đã bị xoá
-    if (duration != null && r.duration == null) r.duration = duration;
-    r.autoThumb = thumb;
-    r.status = "";
-    renderBulkRow(r);
+  // tìm phim trên server: theo id (phim đang mở) hoặc theo tên thư mục
+  let id = movieId || null;
+  if (!id) {
+    const index = await fetch("/api/movies/index", { headers: { authorization: "Bearer " + TOKEN } }).then((r) => r.json());
+    const found = (index.movies || []).find((m) => plain(m.title) === plain(name));
+    if (found) id = found.id;
   }
-}
-
-function applyTemplate() {
-  const t = $("#tplTitle").value, s = $("#tplSub").value;
-  for (const r of bulkRows) { r.title = fillTpl(t, r.ep); r.subtitle = fillTpl(s, r.ep); }
-}
-$("#applyTpl").onclick = () => { applyTemplate(); renderBulk(); };
-
-function refreshBulkNumbers() { if (bulkRows.length) renderBulk(); }
-
-function dupSet() {
-  const taken = new Set(currentEps.filter((e) => e.video_url).map((e) => e.ep_number));   // tập chưa có video: được điền
-  const seen = new Map();
-  for (const r of bulkRows) seen.set(r.ep, (seen.get(r.ep) || 0) + 1);
-  return (r) => !r.ep || r.ep < 1 || taken.has(r.ep) || seen.get(r.ep) > 1;
-}
-
-function renderBulk() {
-  const tbody = $("#bulkRows");
-  tbody.innerHTML = "";
-  bulkRows.forEach((r, i) => {
-    const tr = document.createElement("tr");
-    r._tr = tr;
-    tr.innerHTML = `
-      <td><div class="fname" title="${esc(r.file.name)}">${esc(r.file.name)}</div><div class="muted">${(r.file.size / 1048576).toFixed(1)} MB</div></td>
-      <td><input class="w-ep" data-k="ep" type="number" min="1" value="${r.ep}"></td>
-      <td><input data-k="title" type="text" value="${esc(r.title)}"></td>
-      <td><input data-k="subtitle" type="text" value="${esc(r.subtitle)}"></td>
-      <td><input class="w-dur" data-k="duration" type="number" min="0" value="${r.duration ?? ""}"></td>
-      <td data-thumb></td>
-      <td data-status class="muted"></td>
-      <td><button class="small" data-rm title="Bỏ khỏi danh sách">✕</button></td>`;
-    tr.querySelectorAll("input[data-k]").forEach((inp) => inp.oninput = () => {
-      const k = inp.dataset.k;
-      r[k] = k === "ep" ? Number(inp.value) : k === "duration" ? (inp.value === "" ? null : Number(inp.value)) : inp.value;
-      if (k === "ep") markDup();
-    });
-    tr.querySelector("[data-rm]").onclick = () => { bulkRows.splice(i, 1); bulkRows.length ? renderBulk() : clearBulk(); };
-    tbody.appendChild(tr);
-    renderBulkRow(r);
-  });
-  markDup();
-}
-
-function renderBulkRow(r) {
-  const tr = r._tr; if (!tr) return;
-  const t = r.thumbFile || r.autoThumb;
-  if (t && !r._thumbUrl) r._thumbUrl = URL.createObjectURL(t);
-  tr.querySelector("[data-thumb]").innerHTML = t ? `<img src="${r._thumbUrl}" alt="" title="${r.thumbFile ? esc(r.thumbFile.name) : "Tự cắt từ video"}">` : `<div class="thumb-ph"></div>`;
-  const dur = tr.querySelector('[data-k="duration"]');
-  if (r.duration != null && dur.value === "") dur.value = r.duration;
-  const st = tr.querySelector("[data-status]");
-  st.textContent = r.status;
-  st.className = r.status.startsWith("✓") ? "st-ok" : r.status.startsWith("✗") ? "st-err" : "muted";
-}
-
-function markDup() {
-  const isBad = dupSet();
-  let bad = 0;
-  for (const r of bulkRows) {
-    const inp = r._tr && r._tr.querySelector('[data-k="ep"]');
-    const b = isBad(r) && !r.status.startsWith("✓");
-    if (b) bad++;
-    if (inp) inp.classList.toggle("bad", b);
-  }
-  $("#bulkMsg").textContent = bad ? `${bad} tập bị trùng số hoặc đã có trên server (ô đỏ) — sửa số tập trước khi upload` : `${bulkRows.length} tập sẵn sàng`;
-  return bad;
-}
-
-function clearBulk() {
-  bulkRows = []; $("#bulkRows").innerHTML = ""; $("#bulkFiles").value = ""; $("#bulkFolder").value = "";
-  $("#bulkPanel").classList.add("hidden"); $("#bulkProg").style.width = "0"; $("#bulkMsg").textContent = "";
-}
-$("#bulkClear").onclick = clearBulk;
-
-$("#bulkStart").onclick = async () => {
-  if (!current || !bulkRows.length) return;
-  if (markDup() && !confirm("Có tập bị trùng số, các tập đó sẽ báo lỗi. Vẫn upload các tập còn lại?")) return;
-  const btn = $("#bulkStart"); btn.disabled = true;
-  const todo = bulkRows.filter((r) => !r.status.startsWith("✓"));
-  let done = 0;
-  for (const r of todo) {
-    const fd = new FormData();
-    fd.append("ep_number", r.ep);
-    fd.append("title", r.title || "");
-    fd.append("subtitle", r.subtitle || "");
-    if (r.duration != null) fd.append("duration", r.duration);
-    fd.append("video", r.file);
-    const thumb = r.thumbFile || r.autoThumb;
-    if (thumb) fd.append("thumb", thumb);
-    r.status = "Đang upload..."; renderBulkRow(r);
-    try {
-      await upload("POST", `/api/admin/movies/${current}/episodes`, fd, (p) => $("#bulkProg").style.width = Math.round((done + p) / todo.length * 100) + "%");
-      r.status = "✓ Xong";
-    } catch (e) { r.status = "✗ " + e.message; }
-    renderBulkRow(r);
-    done++;
-    $("#bulkProg").style.width = Math.round(done / todo.length * 100) + "%";
-  }
-  btn.disabled = false;
-  // tải lại danh sách tập nhưng giữ bảng để xem kết quả
-  const data = await fetch("/api/movies/" + current).then((r) => r.json());
-  currentEps = data.episodes; renderEpisodes(); loadMovies();
-  const fails = bulkRows.filter((r) => r.status.startsWith("✗")).length;
-  $("#bulkMsg").textContent = fails ? `${fails} tập lỗi — sửa rồi bấm Upload tất cả để thử lại các tập lỗi` : "✓ Đã upload xong tất cả";
-};
-
-// ------------------------------------------------------------------ đồng bộ Google Sheet
-/**
- * Bố cục 1 tab:
- *   Tên phim     | Tình Yêu Bất Tận        (các dòng thông tin phim, phía trên bảng tập; tuỳ chọn)
- *   Tiêu đề phụ  | Ngôn tình
- *   Mô tả        | ...
- *   ep | title | subtitle | video | thumb | duration      (dòng tiêu đề cột: bắt buộc có cột ep/Tập)
- *   1  | ...
- * Tên cột tiếng Việt cũng được: Tập, Tiêu đề, Tiêu đề phụ, Video, Ảnh, Thời lượng, Tên phim.
- * Không có dòng "Tên phim" => lấy cột "Tên phim" trong bảng, nếu không có nữa => tên tab.
- */
-const SHEET_COLS = {
-  ep: ["ep", "tap", "so tap", "tap so", "episode"],
-  title: ["title", "tieu de", "ten tap"],
-  subtitle: ["subtitle", "tieu de phu", "phu de"],
-  video: ["video", "file", "file video", "ten file", "video file"],
-  thumb: ["thumb", "thumbnail", "anh", "anh tap"],
-  duration: ["duration", "thoi luong"],
-  movie: ["movie", "phim", "ten phim"],
-};
-const SHEET_MOVIE_KEYS = {
-  title: ["title", "name", "ten phim", "ten", "phim", "movie"],
-  subtitle: ["subtitle", "tieu de phu", "phu de"],
-  description: ["description", "mo ta", "noi dung", "gioi thieu"],
-};
-let sheetData = [];
-let sync = null;
-try { $("#sheetUrl").value = localStorage.getItem("sheet_url") || ""; } catch {}
-
-function parseSheetTab(tab) {
-  const values = (tab.values || []).map((r) => r.map((c) => String(c ?? "").trim()));
-  const res = { sheet: tab.sheet, movie: {}, rows: [], warnings: [] };
-  const colOf = (name) => { const k = plain(name).replace(/[:.]$/, ""); for (const [c, a] of Object.entries(SHEET_COLS)) if (a.includes(k)) return c; return null; };
-  const h = values.findIndex((r) => r.some((c) => colOf(c) === "ep"));
-  for (let i = 0; i < (h < 0 ? values.length : h); i++) {
-    const key = plain(values[i][0]).replace(/[:.]$/, "");
-    const val = values[i][1] || "";
-    for (const [field, names] of Object.entries(SHEET_MOVIE_KEYS)) if (names.includes(key) && val) res.movie[field] = val;
-  }
-  if (h < 0) res.warnings.push('Không thấy dòng tiêu đề cột (cần có cột "ep" hoặc "Tập")');
-  else {
-    const map = values[h].map(colOf);
-    let prev = 0;
-    for (let i = h + 1; i < values.length; i++) {
-      const r = values[i];
-      const get = (k) => (map.indexOf(k) >= 0 ? r[map.indexOf(k)] || "" : "");
-      if (!r.some(Boolean)) continue;
-      const m = plain(get("ep")).match(/(\d+)/);
-      const title = get("title"), subtitle = get("subtitle");
-      if (!m && !title && !subtitle) continue;
-      const ep = m ? Number(m[1]) : prev + 1;
-      prev = ep;
-      if (!res.movie.title && get("movie")) res.movie.title = get("movie");
-      const dur = get("duration");
-      res.rows.push({ ep, title, subtitle, video: get("video"), thumb: get("thumb"), duration: /^\d+$/.test(dur) ? Number(dur) : null });
-    }
-    const seen = new Set();
-    for (const r of res.rows) { if (seen.has(r.ep)) res.warnings.push(`Tập ${r.ep} bị lặp trong sheet (dòng sau sẽ ghi đè dòng trước)`); seen.add(r.ep); }
-  }
-  if (!res.movie.title) res.movie.title = tab.sheet;
-  return res;
-}
-
-$("#sheetLoad").onclick = async () => {
-  const u = $("#sheetUrl").value.trim();
-  if (!u) return alert("Dán link Apps Script trước");
-  try { localStorage.setItem("sheet_url", u); } catch {}
-  $("#sheetMsg").textContent = "Đang tải...";
-  try {
-    const data = await api("/api/admin/sheet?url=" + encodeURIComponent(u));
-    sheetData = (data.sheets || []).map(parseSheetTab);
-    $("#sheetTab").innerHTML = sheetData.map((s, i) =>
-      `<option value="${i}">${esc(s.movie.title)} (${s.rows.length} tập)${s.sheet !== s.movie.title ? " · tab " + esc(s.sheet) : ""}</option>`).join("")
-      || `<option value="">Sheet không có tab nào</option>`;
-    $("#sheetMsg").textContent = `✓ ${sheetData.length} phim`;
-  } catch (e) { $("#sheetMsg").textContent = "✗ " + e.message; }
-};
-
-/** Ghép video/ảnh trong thư mục với từng dòng của sheet. */
-function matchLocal(rows, files) {
-  const videos = files.filter(isVideo).sort((a, b) => natural.compare(a.name, b.name));
-  const images = files.filter((f) => !isVideo(f) && isImage(f) && !isPoster(f));
-  const key = (n) => n.toLowerCase();
-  const vidByName = new Map(); for (const f of videos) { vidByName.set(key(f.name), f); vidByName.set(key(stem(f.name)), f); }
-  const imgByName = new Map(); for (const f of images) { imgByName.set(key(f.name), f); imgByName.set(key(stem(f.name)), f); }
-  const imgByNum = new Map(); for (const f of images) { const n = lastNumber(f.name); if (n != null && !imgByNum.has(n)) imgByNum.set(n, f); }
-  const out = new Map(), used = new Set();
-  const take = (ep, f) => { out.set(ep, { video: f }); used.add(f); };
-  // 1) sheet ghi rõ tên file
-  for (const r of rows) if (r.video) { const f = vidByName.get(key(r.video)) || vidByName.get(key(stem(r.video))); if (f && !used.has(f)) take(r.ep, f); }
-  // 2) số trong tên file = số tập
-  for (const r of rows) if (!r.video && !out.has(r.ep)) { const f = videos.find((v) => !used.has(v) && lastNumber(v.name) === r.ep); if (f) take(r.ep, f); }
-  // 3) cả thư mục không file nào có số: ghép theo thứ tự tên file với các tập còn trống
-  //    (thư mục lẫn file có số và không số => file không số coi là "không khớp", tránh ghép nhầm trailer...)
-  const leftover = videos.filter((f) => !used.has(f) && lastNumber(f.name) == null);
-  let byOrder = 0;
-  if (!videos.some((f) => lastNumber(f.name) != null)) {
-    rows.filter((r) => !r.video && !out.has(r.ep)).forEach((r, i) => { if (leftover[i]) { take(r.ep, leftover[i]); byOrder++; } });
-  }
-  // thumbnail: cột thumb trong sheet > ảnh cùng tên video > ảnh cùng số tập
-  for (const r of rows) {
-    const o = out.get(r.ep) || {};
-    o.thumb = (r.thumb && (imgByName.get(key(r.thumb)) || imgByName.get(key(stem(r.thumb)))))
-      || (o.video && imgByName.get(key(stem(o.video.name))))
-      || (o.video && lastNumber(o.video.name) === r.ep ? imgByNum.get(r.ep) : null) || null;
-    if (o.video || o.thumb) out.set(r.ep, o);
-  }
-  return { map: out, unused: videos.filter((f) => !used.has(f)), byOrder };
-}
-
-$("#syncPrepare").onclick = () => prepareSync();
-$("#syncRefresh").onclick = () => prepareSync();
-$("#syncClose").onclick = () => { $("#syncPanel").classList.add("hidden"); sync = null; };
-$("#syncReplaceAll").onchange = () => sync && renderSync();
-
-async function prepareSync(keepMsg) {
-  const tab = sheetData[Number($("#sheetTab").value)];
-  if (!tab) return alert('Bấm "Tải sheet" rồi chọn phim trước');
-  const files = $("#syncFolder").files.length ? topLevelFiles($("#syncFolder").files) : [];
-  const index = await fetch("/api/movies/index", { headers: { authorization: "Bearer " + TOKEN } }).then((r) => r.json());
-  const found = (index.movies || []).find((m) => plain(m.title) === plain(tab.movie.title));
-  let serverMovie = null; const serverEps = new Map();
-  if (found) {
-    const d = await fetch("/api/movies/" + found.id).then((r) => r.json());
-    serverMovie = d.movie;
+  let movie = null;
+  const serverEps = new Map();
+  if (id) {
+    const d = await fetch("/api/movies/" + id).then((r) => r.json());
+    movie = d.movie;
     for (const e of d.episodes) serverEps.set(e.ep_number, e);
   }
-  const match = matchLocal(tab.rows, files);
-  const old = sync;
-  sync = {
-    tab, files, serverMovie, serverEps, match,
-    poster: files.find((f) => isImage(f) && isPoster(f)) || null,
-    rows: tab.rows.map((r) => ({ ...r, local: match.map.get(r.ep) || {}, server: serverEps.get(r.ep) || null,
-      replace: !!old?.rows.find((o) => o.ep === r.ep && o.replace), status: "" })),
-  };
-  if (!keepMsg) $("#syncMsg").textContent = "";
-  renderSync();
-  $("#syncPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+  plan = { files, scan, movie, serverEps, afterUpload: !!afterUpload, folder: name || "", rows: scan.rows.map((r) => ({ ...r, replace: false, status: "" })) };
+
+  $("#fpName").value = movie ? movie.title : (name || "");
+  $("#fpTags").value = ""; $("#fpDesc").value = ""; $("#fpMsg").textContent = "";
+  $("#folderPanel").classList.remove("hidden");
+  renderPlan();
+  $("#folderPanel").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function rowPlan(r) {
-  const s = r.server;
-  const replace = $("#syncReplaceAll").checked || r.replace;
-  const title = r.title || `Tập ${r.ep}`;
-  const info = !s || title !== s.title || (r.subtitle || "") !== (s.subtitle || "") || (r.duration != null && r.duration !== s.duration);
-  const video = !!r.local.video && (!s || !s.video_url || replace);
-  const thumb = !!r.local.thumb && (video || !s || !s.thumb || replace);
-  return { create: !s, info, video, thumb, needs: info || video || thumb, missingAfter: !video && !(s && s.video_url) };
+  const s = plan.serverEps.get(r.ep);
+  const replace = $("#fpReplaceAll").checked || r.replace;
+  const video = !s || !s.video_url || replace;
+  return { s, video, needs: video };
 }
 
-function renderSync() {
-  const { tab, serverMovie, serverEps, match } = sync;
-  $("#syncPanel").classList.remove("hidden");
-  $("#syncTitle").textContent = tab.movie.title;
-  $("#syncSub").textContent = (serverMovie ? `Đã có trên server (#${serverMovie.id}, ${serverMovie.episode_count} tập)` : "Phim mới: sẽ được tạo khi đồng bộ")
-    + (tab.movie.subtitle ? " · " + tab.movie.subtitle : "") + (sync.poster ? ` · poster: ${sync.poster.name}` : "");
-  let nCreate = 0, nInfo = 0, nVideo = 0, nMissing = 0;
-  $("#syncRows").innerHTML = sync.rows.map((r, i) => {
-    const p = rowPlan(r), s = r.server;
-    if (p.create) nCreate++; else if (p.info) nInfo++;
-    if (p.video) nVideo++;
-    if (p.missingAfter) nMissing++;
-    const what = [p.create ? "Tạo tập" : p.info ? "Cập nhật thông tin" : "", p.video ? "upload video" : "", p.thumb && !p.video ? "thumbnail" : ""]
-      .filter(Boolean).join(" + ") || '<span class="muted">Không đổi</span>';
-    const localCell = r.local.video ? esc(r.local.video.name)
-      : r.video ? `<span class="st-err">Không thấy ${esc(r.video)}</span>` : '<span class="muted">—</span>';
+function renderPlan() {
+  const { scan, movie } = plan;
+  $("#fpNewInfo").classList.toggle("hidden", !!movie);
+  $("#fpTitle").textContent = movie ? movie.title : ($("#fpName").value || "(chưa có tên)");
+  $("#fpSub").textContent = (movie ? `Phim đã có trên server (#${movie.id}, ${movie.episode_count} tập)` : "Phim mới — sẽ được tạo khi bấm Upload")
+    + (plan.folder ? ` · thư mục: ${plan.folder}` : "");
+  const posterFile = scan.poster;
+  $("#fpPoster").classList.toggle("hidden", !posterFile && !movie?.poster);
+  if (posterFile) { if (!plan.posterUrl) plan.posterUrl = URL.createObjectURL(posterFile); $("#fpPoster").src = plan.posterUrl; }
+  else if (movie?.poster) $("#fpPoster").src = movie.poster;
+
+  let nNew = 0, nFill = 0, nReplace = 0, nSkip = 0;
+  $("#fpRows").innerHTML = plan.rows.map((r, i) => {
+    const p = rowPlan(r), s = p.s;
+    let what;
+    if (!s) { what = "Tạo tập + upload"; nNew++; }
+    else if (!s.video_url) { what = "Upload video (đang thiếu)"; nFill++; }
+    else if (p.video) { what = "Ghi đè video"; nReplace++; }
+    else { what = '<span class="muted">Đã có, bỏ qua</span>'; nSkip++; }
     const serverCell = !s ? '<span class="muted">Chưa có</span>' : s.video_url ? '<span class="st-ok">Có video</span>' : '<span class="st-err">Có tập, chưa có video</span>';
-    const rep = r.local.video && s && s.video_url
-      ? ` <label class="inline muted"><input type="checkbox" data-rep="${i}" ${r.replace ? "checked" : ""}> ghi đè</label>` : "";
+    const rep = s && s.video_url ? ` <label class="inline muted"><input type="checkbox" data-rep="${i}" ${r.replace ? "checked" : ""}> ghi đè</label>` : "";
     const st = r.status, cls = st.startsWith("✓") ? "st-ok" : st.startsWith("✗") ? "st-err" : "muted";
-    return `<tr><td>${r.ep}</td><td>${esc(r.title || `Tập ${r.ep}`)}</td><td>${esc(r.subtitle)}</td><td><div class="fname" title="${esc(r.local.video?.name || "")}">${localCell}</div></td>
-      <td>${serverCell}</td><td>${what}${p.missingAfter ? ' <span class="muted">(chưa có video)</span>' : ""}${rep}</td><td class="${cls}">${esc(st)}</td></tr>`;
-  }).join("");
-  document.querySelectorAll("[data-rep]").forEach((cb) => cb.onchange = () => { sync.rows[Number(cb.dataset.rep)].replace = cb.checked; renderSync(); });
+    return `<tr><td>${r.ep}</td><td><div class="fname" title="${esc(r.video.name)}">${esc(r.video.name)}</div></td>
+      <td class="muted">${r.thumb ? esc(r.thumb.name) : "tự cắt"}</td><td>${serverCell}</td><td>${what}${rep}</td><td class="${cls}">${esc(st)}</td></tr>`;
+  }).join("") || `<tr><td colspan="6" class="muted">Không có video nào có số tập trong tên file.</td></tr>`;
+  document.querySelectorAll("[data-rep]").forEach((cb) => cb.onchange = () => { plan.rows[Number(cb.dataset.rep)].replace = cb.checked; renderPlan(); });
 
-  $("#syncSummary").innerHTML = `Sheet có <b>${sync.rows.length}</b> tập · tạo mới <b>${nCreate}</b> · cập nhật thông tin <b>${nInfo}</b> · upload video <b>${nVideo}</b>`
-    + (nMissing ? ` · <span class="st-err">${nMissing} tập vẫn chưa có video sau lần này</span>` : ' · <span class="st-ok">đủ video</span>');
-  const extra = [...tab.warnings];
-  if (match.unused.length) extra.push(`${match.unused.length} video trong thư mục không khớp tập nào trong sheet: ${match.unused.slice(0, 8).map((f) => f.name).join(", ")}${match.unused.length > 8 ? "…" : ""}`);
-  if (match.byOrder) extra.push(`${match.byOrder} video không có số trong tên được ghép theo thứ tự tên file — kiểm tra lại cột "Video trong thư mục"`);
-  const notInSheet = [...serverEps.keys()].filter((n) => !sync.rows.some((r) => r.ep === n));
-  if (notInSheet.length) extra.push(`Server có ${notInSheet.length} tập không có trong sheet (giữ nguyên): ${notInSheet.slice(0, 10).join(", ")}${notInSheet.length > 10 ? "…" : ""}`);
-  $("#syncExtra").innerHTML = extra.map((x) => "• " + esc(x)).join("<br>");
+  $("#fpSummary").innerHTML = `Thư mục có <b>${plan.rows.length}</b> tập · tạo mới <b>${nNew}</b> · bù video <b>${nFill}</b>`
+    + (nReplace ? ` · ghi đè <b>${nReplace}</b>` : "") + ` · bỏ qua <b>${nSkip}</b>`;
+
+  const extra = [];
+  if (scan.noNumber.length) extra.push(`${scan.noNumber.length} video không có số tập trong tên, sẽ bỏ qua: ${scan.noNumber.slice(0, 6).map((f) => f.name).join(", ")}${scan.noNumber.length > 6 ? "…" : ""}`);
+  if (scan.duplicates.length) extra.push(`${scan.duplicates.length} video trùng số tập với file khác, sẽ bỏ qua: ${scan.duplicates.slice(0, 6).map((f) => f.name).join(", ")}`);
+  const missingOnServer = [...plan.serverEps.values()].filter((e) => !e.video_url && !plan.rows.some((r) => r.ep === e.ep_number)).map((e) => e.ep_number);
+  if (missingOnServer.length) extra.push(`Server còn ${missingOnServer.length} tập chưa có video mà thư mục này không có: ${missingOnServer.slice(0, 10).join(", ")}`);
+  if (posterFile && movie?.poster && !plan.afterUpload) extra.push(`Có ${posterFile.name} trong thư mục nhưng phim đã có poster — giữ poster cũ (đổi bằng nút Sửa phim)`);
+  $("#fpExtra").innerHTML = extra.map((x) => "• " + esc(x)).join("<br>");
+  $("#fpRun").disabled = !!movie && !plan.rows.some((r) => rowPlan(r).needs);
 }
 
-$("#syncRun").onclick = async () => {
-  if (!sync) return;
-  const btn = $("#syncRun"); btn.disabled = true;
-  const { tab } = sync;
+$("#fpRun").onclick = async () => {
+  if (!plan) return;
+  const btn = $("#fpRun"); btn.disabled = true;
   let ok = 0, fail = 0;
   try {
-    // 1) phim: tạo mới hoặc cập nhật thông tin
-    let movieId = sync.serverMovie?.id;
-    const mv = tab.movie;
+    // 1) phim: tạo mới nếu chưa có
+    let movieId = plan.movie?.id;
     if (!movieId) {
+      const title = $("#fpName").value.trim();
+      if (!title) { alert("Nhập tên phim"); btn.disabled = false; return; }
       const fd = new FormData();
-      fd.append("title", mv.title); fd.append("subtitle", mv.subtitle || ""); fd.append("description", mv.description || "");
-      if (sync.poster) fd.append("poster", sync.poster);
-      $("#syncMsg").textContent = "Đang tạo phim...";
+      fd.append("title", title); fd.append("tags", $("#fpTags").value); fd.append("description", $("#fpDesc").value);
+      if (plan.scan.poster) fd.append("poster", plan.scan.poster);
+      $("#fpMsg").textContent = "Đang tạo phim...";
       movieId = (await upload("POST", "/api/admin/movies", fd)).movie.id;
-    } else {
-      const sm = sync.serverMovie, fd = new FormData();
-      let changed = false;
-      if (mv.subtitle != null && (mv.subtitle || "") !== (sm.subtitle || "")) { fd.append("subtitle", mv.subtitle); changed = true; }
-      if (mv.description != null && (mv.description || "") !== (sm.description || "")) { fd.append("description", mv.description); changed = true; }
-      if (sync.poster && !sm.poster) { fd.append("poster", sync.poster); changed = true; }
-      if (changed) await upload("PATCH", "/api/admin/movies/" + movieId, fd);
+    } else if (plan.scan.poster && !plan.movie.poster) {
+      const fd = new FormData(); fd.append("poster", plan.scan.poster);
+      await upload("PATCH", "/api/admin/movies/" + movieId, fd);
     }
-    // 2) từng tập: tạo/cập nhật + upload video còn thiếu
-    const todo = sync.rows.filter((r) => rowPlan(r).needs);
+    // 2) từng tập
+    const todo = plan.rows.filter((r) => rowPlan(r).needs);
     for (let i = 0; i < todo.length; i++) {
-      const r = todo[i], p = rowPlan(r), fd = new FormData();
-      fd.append("title", r.title || ""); fd.append("subtitle", r.subtitle || "");
-      if (r.duration != null) fd.append("duration", r.duration);
-      if (p.video) {
-        r.status = "Đang đọc video..."; renderSync();
-        const { duration, thumb } = await probeVideo(r.local.video, !r.local.thumb);
-        if (r.duration == null && duration != null) fd.append("duration", duration);
-        fd.append("video", r.local.video);
-        if (r.local.thumb) fd.append("thumb", r.local.thumb); else if (thumb) fd.append("thumb", thumb);
-      } else if (p.thumb) fd.append("thumb", r.local.thumb);
-      r.status = p.video ? "Đang upload..." : "Đang lưu..."; renderSync();
+      const r = todo[i];
+      r.status = "Đang đọc video..."; renderPlan();
+      const { duration, thumb } = await probeVideo(r.video, !r.thumb);
+      const fd = new FormData();
+      if (duration != null) fd.append("duration", duration);
+      fd.append("video", r.video);
+      if (r.thumb) fd.append("thumb", r.thumb); else if (thumb) fd.append("thumb", thumb);
+      r.status = "Đang upload..."; renderPlan();
       try {
         await upload("PUT", `/api/admin/movies/${movieId}/episodes/${r.ep}`, fd,
-          (x) => $("#syncProg").style.width = Math.round((i + x) / todo.length * 100) + "%");
+          (x) => $("#fpProg").style.width = Math.round((i + x) / todo.length * 100) + "%");
         r.status = "✓ Xong"; ok++;
       } catch (e) { r.status = "✗ " + e.message; fail++; }
-      $("#syncProg").style.width = Math.round((i + 1) / todo.length * 100) + "%";
-      renderSync();
+      $("#fpProg").style.width = Math.round((i + 1) / todo.length * 100) + "%";
+      renderPlan();
     }
-    const failed = new Map(sync.rows.filter((r) => r.status.startsWith("✗")).map((r) => [r.ep, r.status]));
-    await prepareSync(true);   // lấy lại trạng thái server để thấy kết quả thật
-    for (const r of sync.rows) if (failed.has(r.ep)) r.status = failed.get(r.ep);
-    renderSync();
-    $("#syncMsg").textContent = fail ? `${ok} tập xong, ${fail} tập lỗi — bấm Đồng bộ để thử lại` : `✓ Đồng bộ xong ${ok} tập`;
-    loadMovies();
-    if (current === movieId) openMovie(movieId);
-  } catch (e) { $("#syncMsg").textContent = "✗ " + e.message; }
-  $("#syncProg").style.width = "0";
+    // 3) lấy lại trạng thái server để thấy kết quả thật
+    const failed = new Map(plan.rows.filter((r) => r.status.startsWith("✗")).map((r) => [r.ep, r.status]));
+    await preparePlan(plan.files, { movieId, name: plan.folder, afterUpload: true });
+    for (const r of plan.rows) if (failed.has(r.ep)) r.status = failed.get(r.ep);
+    $("#fpReplaceAll").checked = false;
+    renderPlan();
+    $("#fpMsg").textContent = fail ? `${ok} tập xong, ${fail} tập lỗi — bấm Upload để thử lại` : `✓ Đã upload ${ok} tập`;
+    await openMovie(movieId);
+  } catch (e) { $("#fpMsg").textContent = "✗ " + e.message; }
+  $("#fpProg").style.width = "0";
   btn.disabled = false;
+  if (plan) renderPlan();
 };
 
 loadMovies();

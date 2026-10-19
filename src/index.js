@@ -2,20 +2,20 @@
  * short-drama — Cloudflare Worker
  *
  * Public (app gọi):
- *   GET  /api/movies?page=1&limit=20     danh sách phim (kèm số tập)
+ *   GET  /api/movies?page=1&limit=20     danh sách phim (kèm số tập); thêm &tag=Ngôn%20tình để lọc theo tag
  *   GET  /api/movies/index               toàn bộ phim, chỉ trường gọn (để app tải 1 lần rồi search trên máy), cache 5 phút
- *   GET  /api/search?q=ten+phim          tìm phim theo tên / tiêu đề phụ (không phân biệt dấu, hoa thường), cache 60 giây
+ *   GET  /api/search?q=ten+phim          tìm phim theo tên / tag (không phân biệt dấu, hoa thường), cache 60 giây
  *   GET  /api/movies/:id                 chi tiết phim + danh sách tập
  *   GET  /api/episodes/:id               chi tiết 1 tập
  *
  * Admin (header Authorization: Bearer <ADMIN_TOKEN>):
  *   GET    /api/admin/ping                         kiểm tra token
- *   POST   /api/admin/movies                       tạo phim (multipart: title, subtitle, description, poster)
+ *   POST   /api/admin/movies                       tạo phim (multipart: title, tags, description, poster)
+ *                                                   tags: "Ngôn tình, Tổng tài" hoặc JSON ["Ngôn tình","Tổng tài"]
  *   PATCH  /api/admin/movies/:id                   sửa phim (multipart, field nào gửi thì sửa field đó)
  *   DELETE /api/admin/movies/:id                   xoá phim + toàn bộ tập + file trên R2
- *   POST   /api/admin/movies/:id/episodes          thêm tập (multipart: ep_number, title, subtitle, duration, video, thumb)
- *   PUT    /api/admin/movies/:id/episodes/:ep      tạo hoặc cập nhật tập số :ep (video không bắt buộc) — dùng khi đồng bộ từ Google Sheet
- *   GET    /api/admin/sheet?url=<Apps Script URL>  đọc dữ liệu Google Sheet qua Apps Script (tránh lỗi CORS)
+ *   POST   /api/admin/movies/:id/episodes          thêm tập (multipart: ep_number, duration, video, thumb)
+ *   PUT    /api/admin/movies/:id/episodes/:ep      tạo hoặc cập nhật tập số :ep (dùng khi upload theo thư mục)
  *   PATCH  /api/admin/episodes/:id                 sửa tập
  *   DELETE /api/admin/episodes/:id                 xoá tập + file trên R2
  *
@@ -64,7 +64,7 @@ async function route(request, env, ctx) {
 
   // Public API
   if (method === "GET" && path === "/api/movies") return listMovies(url, env);
-  // Admin (có ADMIN_TOKEN) luôn đọc dữ liệu mới, không qua cache — tránh tạo trùng phim khi đồng bộ
+  // Admin (có ADMIN_TOKEN) luôn đọc dữ liệu mới, không qua cache — tránh tạo trùng phim khi upload
   const fresh = await hasAdminToken(request, env);
   if (method === "GET" && path === "/api/movies/index") return fresh ? movieIndex(url, env) : cached(url, ctx, 300, () => movieIndex(url, env));
   if (method === "GET" && path === "/api/search") return fresh ? searchMovies(url, env) : cached(url, ctx, 60, () => searchMovies(url, env));
@@ -86,7 +86,6 @@ async function route(request, env, ctx) {
     if (method === "PUT" && (m = path.match(/^\/api\/admin\/movies\/(\d+)\/episodes\/(\d+)$/))) {
       return upsertEpisode(Number(m[1]), Number(m[2]), request, url, env);
     }
-    if (method === "GET" && path === "/api/admin/sheet") return proxySheet(url, env);
     if ((m = path.match(/^\/api\/admin\/episodes\/(\d+)$/))) {
       if (method === "PATCH") return updateEpisode(Number(m[1]), request, url, env);
       if (method === "DELETE") return deleteEpisode(Number(m[1]), env);
@@ -104,15 +103,23 @@ async function listMovies(url, env) {
   const page = clampInt(url.searchParams.get("page"), 1, 100000, 1);
   const offset = (page - 1) * limit;
 
+  const tag = str(url.searchParams.get("tag"));
+  // lọc theo tag: so khớp đúng 1 phần tử trong mảng tags
+  const where = tag ? "WHERE EXISTS (SELECT 1 FROM json_each(movies.tags) WHERE value = ?3)" : "";
+  const list = env.DB.prepare(`SELECT * FROM movies ${where} ORDER BY id DESC LIMIT ?1 OFFSET ?2`);
+  const count = env.DB.prepare(
+    `SELECT COUNT(*) AS total FROM movies ${where.replace("?3", "?1")}`
+  );
   const [{ results }, totalRow] = await Promise.all([
-    env.DB.prepare("SELECT * FROM movies ORDER BY id DESC LIMIT ?1 OFFSET ?2").bind(limit, offset).all(),
-    env.DB.prepare("SELECT COUNT(*) AS total FROM movies").first(),
+    (tag ? list.bind(limit, offset, tag) : list.bind(limit, offset)).all(),
+    (tag ? count.bind(tag) : count).first(),
   ]);
 
   const base = mediaBase(url, env);
   return json({
     page,
     limit,
+    tag: tag || undefined,
     total: totalRow.total,
     movies: results.map((r) => movieDto(r, base)),
   });
@@ -135,7 +142,7 @@ async function getMovie(id, url, env) {
 /** Toàn bộ phim, chỉ trường cần cho danh sách + search trên máy. Đọc đúng số dòng = số phim. */
 async function movieIndex(url, env) {
   const { results } = await env.DB.prepare(
-    "SELECT id, title, subtitle, poster_key, episode_count FROM movies ORDER BY id DESC"
+    "SELECT id, title, tags, poster_key, episode_count FROM movies ORDER BY id DESC"
   ).all();
   const base = mediaBase(url, env);
   return json({
@@ -143,7 +150,7 @@ async function movieIndex(url, env) {
     movies: results.map((r) => ({
       id: r.id,
       title: r.title,
-      subtitle: r.subtitle,
+      tags: parseTags(r.tags),
       poster: keyToUrl(r.poster_key, base),
       episode_count: r.episode_count,
     })),
@@ -151,7 +158,7 @@ async function movieIndex(url, env) {
 }
 
 /**
- * Tìm phim theo tên/tiêu đề phụ. Không phân biệt dấu và hoa thường:
+ * Tìm phim theo tên/tag. Không phân biệt dấu và hoa thường:
  * "tinh yeu" khớp "Tình Yêu". Mọi từ trong q đều phải xuất hiện.
  * Số phim nhỏ (vài trăm) nên lọc trong Worker; D1 chỉ đọc 1 dòng / phim.
  */
@@ -162,13 +169,13 @@ async function searchMovies(url, env) {
   const words = q.split(" ");
 
   const { results } = await env.DB.prepare(
-    "SELECT id, title, subtitle, description, poster_key, episode_count, created_at FROM movies"
+    "SELECT id, title, tags, description, poster_key, episode_count, created_at FROM movies"
   ).all();
 
   const scored = [];
   for (const r of results) {
     const t = normalizeText(r.title);
-    const hay = `${t} ${normalizeText(r.subtitle)}`;
+    const hay = `${t} ${normalizeText(parseTags(r.tags).join(" "))}`;
     if (!words.every((w) => hay.includes(w))) continue;
     const score = t === q ? 0 : t.startsWith(q) ? 1 : t.includes(q) ? 2 : 3;
     scored.push({ r, score });
@@ -234,8 +241,8 @@ async function createMovie(request, url, env) {
   if (!title) throw new HttpError(400, "title is required");
 
   const row = await env.DB.prepare(
-    "INSERT INTO movies (title, subtitle, description) VALUES (?1, ?2, ?3) RETURNING *"
-  ).bind(title, str(form.get("subtitle")), str(form.get("description"))).first();
+    "INSERT INTO movies (title, tags, description) VALUES (?1, ?2, ?3) RETURNING *"
+  ).bind(title, JSON.stringify(readTags(form.get("tags"))), str(form.get("description"))).first();
 
   const poster = fileOrNull(form.get("poster"));
   if (poster) {
@@ -253,7 +260,7 @@ async function updateMovie(id, request, url, env) {
 
   const next = {
     title: form.has("title") ? str(form.get("title")) : movie.title,
-    subtitle: form.has("subtitle") ? str(form.get("subtitle")) : movie.subtitle,
+    tags: form.has("tags") ? JSON.stringify(readTags(form.get("tags"))) : movie.tags,
     description: form.has("description") ? str(form.get("description")) : movie.description,
     poster_key: movie.poster_key,
   };
@@ -263,8 +270,8 @@ async function updateMovie(id, request, url, env) {
   if (poster) next.poster_key = await putFile(env, `movies/${id}/poster`, poster);
 
   const row = await env.DB.prepare(
-    "UPDATE movies SET title=?1, subtitle=?2, description=?3, poster_key=?4 WHERE id=?5 RETURNING *"
-  ).bind(next.title, next.subtitle, next.description, next.poster_key, id).first();
+    "UPDATE movies SET title=?1, tags=?2, description=?3, poster_key=?4 WHERE id=?5 RETURNING *"
+  ).bind(next.title, next.tags, next.description, next.poster_key, id).first();
 
   if (poster && movie.poster_key) await env.BUCKET.delete(movie.poster_key);
   return json({ movie: movieDto(row, mediaBase(url, env)) });
@@ -304,19 +311,18 @@ async function createEpisode(movieId, request, url, env) {
     "SELECT id, video_key FROM episodes WHERE movie_id = ?1 AND ep_number = ?2"
   ).bind(movieId, epNumber).first();
   if (exists && exists.video_key) throw new HttpError(409, `Episode ${epNumber} already exists (id ${exists.id}), use PATCH to replace`);
-  if (exists) return saveEpisode(movieId, epNumber, form, url, env);   // tập đã tạo từ Sheet nhưng chưa có video => điền video
+  if (exists) return saveEpisode(movieId, epNumber, form, url, env);   // tập đã có nhưng chưa có video => điền video
 
   const ep2 = String(epNumber).padStart(2, "0");
   const videoKey = await putFile(env, `movies/${movieId}/ep_${ep2}`, video);
   const thumb = fileOrNull(form.get("thumb"));
   const thumbKey = thumb ? await putFile(env, `movies/${movieId}/ep_${ep2}_thumb`, thumb) : null;
 
-  const title = str(form.get("title")) || `Tập ${epNumber}`;
   try {
     const row = await env.DB.prepare(
-      `INSERT INTO episodes (movie_id, ep_number, title, subtitle, thumb_key, video_key, duration)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING *`
-    ).bind(movieId, epNumber, title, str(form.get("subtitle")), thumbKey, videoKey, intOrNull(form.get("duration"))).first();
+      `INSERT INTO episodes (movie_id, ep_number, thumb_key, video_key, duration)
+       VALUES (?1, ?2, ?3, ?4, ?5) RETURNING *`
+    ).bind(movieId, epNumber, thumbKey, videoKey, intOrNull(form.get("duration"))).first();
     await refreshEpisodeCount(env, movieId);
     return json({ episode: episodeDto(row, mediaBase(url, env)) }, 201);
   } catch (err) {
@@ -346,8 +352,6 @@ async function saveEpisode(movieId, epNumber, form, url, env) {
   const newThumbKey = thumb ? await putFile(env, `movies/${movieId}/ep_${ep2}_thumb`, thumb) : null;
 
   const pick = (field, parse, fallback) => (form.has(field) ? parse(form.get(field)) : fallback);
-  const title = pick("title", str, old?.title) || `Tập ${epNumber}`;
-  const subtitle = pick("subtitle", str, old?.subtitle ?? null);
   const duration = pick("duration", intOrNull, old?.duration ?? null);
   const videoKey = newVideoKey || old?.video_key || null;
   const thumbKey = newThumbKey || old?.thumb_key || null;
@@ -356,13 +360,13 @@ async function saveEpisode(movieId, epNumber, form, url, env) {
   try {
     if (old) {
       row = await env.DB.prepare(
-        "UPDATE episodes SET title=?1, subtitle=?2, duration=?3, video_key=?4, thumb_key=?5 WHERE id=?6 RETURNING *"
-      ).bind(title, subtitle, duration, videoKey, thumbKey, old.id).first();
+        "UPDATE episodes SET duration=?1, video_key=?2, thumb_key=?3 WHERE id=?4 RETURNING *"
+      ).bind(duration, videoKey, thumbKey, old.id).first();
     } else {
       row = await env.DB.prepare(
-        `INSERT INTO episodes (movie_id, ep_number, title, subtitle, thumb_key, video_key, duration)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING *`
-      ).bind(movieId, epNumber, title, subtitle, thumbKey, videoKey, duration).first();
+        `INSERT INTO episodes (movie_id, ep_number, thumb_key, video_key, duration)
+         VALUES (?1, ?2, ?3, ?4, ?5) RETURNING *`
+      ).bind(movieId, epNumber, thumbKey, videoKey, duration).first();
       await refreshEpisodeCount(env, movieId);
     }
   } catch (err) {
@@ -374,24 +378,6 @@ async function saveEpisode(movieId, epNumber, form, url, env) {
   return json({ episode: episodeDto(row, mediaBase(url, env)), created: !old }, old ? 200 : 201);
 }
 
-/** Đọc JSON từ Apps Script web app (script.google.com) phía server, tránh lỗi CORS trên trình duyệt. */
-async function proxySheet(url, env) {
-  const target = url.searchParams.get("url") || env.SHEET_URL || "";
-  let u;
-  try { u = new URL(target); } catch { throw new HttpError(400, "Thiếu hoặc sai link Apps Script"); }
-  if (u.protocol !== "https:" || !/^script\.google(usercontent)?\.com$/.test(u.hostname)) {
-    throw new HttpError(400, "Chỉ chấp nhận link Apps Script dạng https://script.google.com/macros/s/.../exec");
-  }
-  const res = await fetch(u.toString(), { redirect: "follow" });
-  const text = await res.text();
-  let data;
-  try { data = JSON.parse(text); } catch {
-    throw new HttpError(502, "Apps Script không trả JSON. Kiểm tra lại quyền truy cập (Anyone) và link /exec");
-  }
-  if (!res.ok || data.error) throw new HttpError(502, data.error || `Apps Script HTTP ${res.status}`);
-  return json(data);
-}
-
 async function updateEpisode(id, request, url, env) {
   const ep = await env.DB.prepare("SELECT * FROM episodes WHERE id = ?1").bind(id).first();
   if (!ep) throw new HttpError(404, "Episode not found");
@@ -400,8 +386,6 @@ async function updateEpisode(id, request, url, env) {
 
   const next = {
     ep_number: ep.ep_number,
-    title: form.has("title") ? str(form.get("title")) : ep.title,
-    subtitle: form.has("subtitle") ? str(form.get("subtitle")) : ep.subtitle,
     duration: form.has("duration") ? intOrNull(form.get("duration")) : ep.duration,
     video_key: ep.video_key,
     thumb_key: ep.thumb_key,
@@ -419,7 +403,6 @@ async function updateEpisode(id, request, url, env) {
       next.ep_number = n;
     }
   }
-  if (!next.title) next.title = `Tập ${next.ep_number}`;
 
   const oldKeys = [];
   const video = fileOrNull(form.get("video"));
@@ -434,8 +417,8 @@ async function updateEpisode(id, request, url, env) {
   }
 
   const row = await env.DB.prepare(
-    "UPDATE episodes SET ep_number=?1, title=?2, subtitle=?3, duration=?4, video_key=?5, thumb_key=?6 WHERE id=?7 RETURNING *"
-  ).bind(next.ep_number, next.title, next.subtitle, next.duration, next.video_key, next.thumb_key, id).first();
+    "UPDATE episodes SET ep_number=?1, duration=?2, video_key=?3, thumb_key=?4 WHERE id=?5 RETURNING *"
+  ).bind(next.ep_number, next.duration, next.video_key, next.thumb_key, id).first();
 
   await deleteKeys(env, oldKeys);
   return json({ episode: episodeDto(row, mediaBase(url, env)) });
@@ -496,7 +479,7 @@ function movieDto(r, base) {
   return {
     id: r.id,
     title: r.title,
-    subtitle: r.subtitle,
+    tags: parseTags(r.tags),
     description: r.description,
     poster: keyToUrl(r.poster_key, base),
     episode_count: r.episode_count ?? undefined,
@@ -504,13 +487,44 @@ function movieDto(r, base) {
   };
 }
 
+/** Đọc cột tags (JSON) từ DB => mảng chuỗi. */
+function parseTags(v) {
+  try {
+    const a = JSON.parse(v || "[]");
+    return Array.isArray(a) ? a.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Đọc tags từ form: JSON mảng hoặc chuỗi cách nhau bằng dấu phẩy. Bỏ trống, bỏ trùng (không phân biệt dấu/hoa thường). */
+function readTags(v) {
+  if (v == null || typeof v !== "string") return [];
+  let list;
+  const t = v.trim();
+  if (t.startsWith("[")) {
+    try { list = JSON.parse(t); } catch { throw new HttpError(400, "tags JSON không hợp lệ"); }
+    if (!Array.isArray(list)) throw new HttpError(400, "tags phải là mảng");
+  } else {
+    list = t.split(/[,;\n]/);
+  }
+  const seen = new Set();
+  const out = [];
+  for (const x of list) {
+    const tag = String(x ?? "").replace(/\s+/g, " ").trim().slice(0, 50);
+    const k = normalizeText(tag);
+    if (!tag || seen.has(k)) continue;
+    seen.add(k);
+    out.push(tag);
+  }
+  return out.slice(0, 30);
+}
+
 function episodeDto(e, base) {
   return {
     id: e.id,
     movie_id: e.movie_id,
     ep_number: e.ep_number,
-    title: e.title,
-    subtitle: e.subtitle,
     thumb: keyToUrl(e.thumb_key, base),
     video_url: keyToUrl(e.video_key, base),
     duration: e.duration,

@@ -1,5 +1,5 @@
 -- Cho phép tạo tập trước khi có video (video_key được để trống).
--- Dùng khi đồng bộ từ Google Sheet: sheet có bao nhiêu tập thì tạo bấy nhiêu, video bổ sung sau.
+-- Tập có thể được tạo trước, video bổ sung sau.
 -- SQLite không đổi được NOT NULL trực tiếp => tạo bảng mới, chép dữ liệu, đổi tên. Dữ liệu cũ giữ nguyên.
 PRAGMA defer_foreign_keys = true;
 

@@ -1,47 +1,31 @@
 #!/usr/bin/env python3
 """
-Upload hàng loạt phim + tập lên short-drama.
+Upload hàng loạt phim lên short-drama từ dòng lệnh (cùng quy tắc với trang admin).
 
 Cấu trúc thư mục:
 
     phim/
-      Ten Phim A/
-        movie.json        (tuỳ chọn) {"title": "...", "subtitle": "...", "description": "..."}
-        poster.jpg        (tuỳ chọn) poster.jpg / poster.png / poster.webp
-        episodes.csv      (tuỳ chọn) tiêu đề, tiêu đề phụ, thời lượng cho từng tập (xem bên dưới)
-        ep_01.mp4
-        ep_01.jpg         (tuỳ chọn) thumbnail
+      Ten Phim A/          ← tên thư mục = tên phim
+        poster.jpg         (tuỳ chọn) poster.jpg / poster.png / poster.webp
+        movie.json         (tuỳ chọn) {"description": "...", "tags": ["Ngôn tình", "Tổng tài"]} cho phim mới
+        Tap 01.mp4         ← số tập = số cuối cùng trong tên file (ep_01.mp4, 01.mp4, tap1.mp4...)
+        Tap 01.jpg         (tuỳ chọn) thumbnail; không có thì tự cắt từ video nếu máy có ffmpeg
         ...
       Ten Phim B/
         ...
 
-Số tập:
-  - Tên file có số (ep_05.mp4, tap5.mp4, 05.mp4) => lấy số cuối cùng.
-  - Tên file không có số => đánh tiếp theo thứ tự tên file, sau số lớn nhất ở trên.
-  - Có cột "ep" trong episodes.csv => dùng số đó (ưu tiên cao nhất).
-
-Thumbnail: ảnh cùng tên với video (abc.mp4 + abc.jpg) hoặc cùng số tập (ep_05.jpg).
-  Không có ảnh và máy có ffmpeg => tự cắt khung hình ở giây thứ 1.
-
-Thời lượng: lấy từ episodes.csv, nếu không có thì tự đọc bằng ffprobe (nếu máy có ffmpeg).
-
-episodes.csv (UTF-8, dòng đầu là tiêu đề cột; chỉ cột "file" là bắt buộc):
-
-    file,ep,title,subtitle,duration
-    ep_01.mp4,1,Cuộc gặp gỡ,Tập mở đầu,
-    ep_02.mp4,2,Hiểu lầm,,95
+- File video không có số trong tên: bỏ qua.
+- 2 file cùng số tập: giữ file tên ngắn hơn.
+- Phim đã có trên server (trùng tên): chỉ upload tập còn thiếu video.
 
 Chạy:
     pip install requests
     python scripts/bulk_upload.py --api https://short-drama.<subdomain>.workers.dev --token <ADMIN_TOKEN> --root ./phim
 
-Thêm --dry-run để chỉ xem danh sách sẽ upload (số tập, tiêu đề, thumb), không gửi gì lên server.
-
-Chạy lại bao nhiêu lần cũng được: script nhớ phim đã tạo (file .upload_state.json trong --root)
-và bỏ qua tập đã có trên server.
+Thêm --dry-run để chỉ xem danh sách sẽ upload, không gửi gì lên server.
+Chạy lại bao nhiêu lần cũng được.
 """
 import argparse
-import csv
 import json
 import mimetypes
 import re
@@ -50,11 +34,12 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 from pathlib import Path
 
 VIDEO_EXT = {".mp4", ".m4v", ".webm", ".mov"}
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp"}
-STATE_FILE = ".upload_state.json"
+POSTER_NAMES = ("poster", "cover", "bia")
 HAS_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
 
 
@@ -65,6 +50,12 @@ def last_number(name: str):
 
 def natural_key(name: str):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", name)]
+
+
+def plain(s) -> str:
+    s = unicodedata.normalize("NFD", str(s or ""))
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    return s.replace("đ", "d").replace("Đ", "d").lower().strip()
 
 
 def file_tuple(path: Path):
@@ -100,59 +91,30 @@ def make_thumb(path: Path, out_dir: Path):
         return None
 
 
-def read_csv(path: Path):
-    """Trả về {tên file (thường): {ep,title,subtitle,duration}}"""
-    if not path.exists():
-        return {}
-    rows = {}
-    with open(path, newline="", encoding="utf-8-sig") as f:
-        for row in csv.DictReader(f):
-            name = (row.get("file") or "").strip()
-            if name:
-                rows[name.lower()] = {k: (v or "").strip() for k, v in row.items() if k}
-    return rows
-
-
-def plan_episodes(mdir: Path):
-    """Ghép video + thumbnail + thông tin csv, đánh số tập. Trả về list dict, đã sắp theo số tập."""
+def scan_folder(mdir: Path):
+    """Trả về (danh sách tập, file không có số, file trùng số, poster)."""
     files = [p for p in mdir.iterdir() if p.is_file() and not p.name.startswith(".")]
-    videos = sorted((p for p in files if p.suffix.lower() in VIDEO_EXT), key=lambda p: natural_key(p.name))
-    images = [p for p in files if p.suffix.lower() in IMAGE_EXT and p.stem.lower() not in ("poster", "cover", "bia")]
+    videos = [p for p in files if p.suffix.lower() in VIDEO_EXT]
+    images = [p for p in files if p.suffix.lower() in IMAGE_EXT and p.stem.lower() not in POSTER_NAMES]
     by_stem = {p.stem.lower(): p for p in images}
     by_num = {}
     for p in images:
         n = last_number(p.name)
         if n is not None:
             by_num.setdefault(n, p)
-    meta = read_csv(mdir / "episodes.csv")
 
-    eps = []
-    for v in videos:
-        m = meta.get(v.name.lower(), {})
-        csv_ep = int(m["ep"]) if str(m.get("ep") or "").isdigit() else None
-        name_ep = last_number(v.name)
-        eps.append({"video": v, "meta": m, "ep": csv_ep or name_ep, "numbered": (csv_ep or name_ep) is not None})
-
-    # file không có số => đánh tiếp sau số lớn nhất, theo thứ tự tên file (ổn định giữa các lần chạy)
-    nxt = max([e["ep"] for e in eps if e["numbered"]] or [0]) + 1
-    for e in eps:
-        if e["ep"] is None:
-            e["ep"] = nxt
-            nxt += 1
-
-    for e in eps:
-        v, m = e["video"], e["meta"]
-        e["thumb"] = by_stem.get(v.stem.lower()) or (by_num.get(e["ep"]) if e["numbered"] else None)
-        e["title"] = m.get("title") or f"Tập {e['ep']}"
-        e["subtitle"] = m.get("subtitle") or ""
-        e["duration"] = int(m["duration"]) if str(m.get("duration") or "").isdigit() else None
-    eps.sort(key=lambda e: e["ep"])
-
-    seen = {}
-    for e in eps:
-        seen.setdefault(e["ep"], []).append(e["video"].name)
-    dups = {n: names for n, names in seen.items() if len(names) > 1}
-    return eps, dups
+    eps, no_number, dups = {}, [], []
+    # trùng số tập: giữ file tên ngắn nhất (thường là bản gốc, không phải "... (copy)")
+    for v in sorted(videos, key=lambda p: (len(p.name), natural_key(p.name))):
+        n = last_number(v.name)
+        if n is None or n < 1:
+            no_number.append(v)
+        elif n in eps:
+            dups.append(v)
+        else:
+            eps[n] = {"ep": n, "video": v, "thumb": by_stem.get(v.stem.lower()) or by_num.get(n)}
+    poster = next((mdir / f"{n}{e}" for n in POSTER_NAMES for e in IMAGE_EXT if (mdir / f"{n}{e}").exists()), None)
+    return [eps[k] for k in sorted(eps)], no_number, dups, poster
 
 
 def request_with_retry(session, method, url, retries=3, files_factory=None, **kwargs):
@@ -191,16 +153,21 @@ def main():
     if not HAS_FFMPEG:
         print("(Không thấy ffmpeg: sẽ không tự lấy thời lượng / tự cắt thumbnail. Cài: brew install ffmpeg)")
 
+    def print_notes(no_number, dups):
+        if no_number:
+            print(f"  ! Bỏ qua (không có số tập trong tên): {', '.join(p.name for p in no_number)}")
+        if dups:
+            print(f"  ! Bỏ qua (trùng số tập với file khác): {', '.join(p.name for p in dups)}")
+
     # ---- dry run: chỉ xem kế hoạch
     if args.dry_run:
         for mdir in movie_dirs:
-            eps, dups = plan_episodes(mdir)
-            print(f"\n== {mdir.name}  ({len(eps)} tập)")
+            eps, no_number, dups, poster = scan_folder(mdir)
+            print(f"\n== {mdir.name}  ({len(eps)} tập)" + (f"  poster: {poster.name}" if poster else ""))
             for e in eps:
                 thumb = e["thumb"].name if e["thumb"] else ("tự cắt từ video" if HAS_FFMPEG else "-")
-                print(f"  Tập {e['ep']:>3}  {e['video'].name:<30} | {e['title']} | {e['subtitle']} | thumb: {thumb}")
-            for n, names in dups.items():
-                print(f"  ! Trùng số tập {n}: {', '.join(names)}")
+                print(f"  Tập {e['ep']:>3}  {e['video'].name:<30} | thumb: {thumb}")
+            print_notes(no_number, dups)
         return
 
     if not args.api or not args.token:
@@ -217,39 +184,32 @@ def main():
     if r.status_code != 200:
         sys.exit(f"Token không hợp lệ hoặc API sai: HTTP {r.status_code} {r.text[:200]}")
 
-    state_path = root / STATE_FILE
-    state = json.loads(state_path.read_text("utf-8")) if state_path.exists() else {}
-
-    def save_state():
-        state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), "utf-8")
+    # danh sách phim trên server (đọc mới, không qua cache vì có token admin)
+    server_movies = s.get(f"{api}/api/movies/index", timeout=30).json().get("movies", [])
+    by_title = {plain(m["title"]): m["id"] for m in server_movies}
 
     total_ok = total_skip = total_fail = 0
     tmp = Path(tempfile.mkdtemp(prefix="short-drama-thumbs-"))
 
     for mdir in movie_dirs:
-        info = {}
-        if (mdir / "movie.json").exists():
-            info = json.loads((mdir / "movie.json").read_text("utf-8"))
-        title = info.get("title") or mdir.name
+        title = mdir.name
         print(f"\n== {title}")
+        eps, no_number, dups, poster = scan_folder(mdir)
+        print_notes(no_number, dups)
 
-        eps, dups = plan_episodes(mdir)
-        if dups:
-            for n, names in dups.items():
-                print(f"  ✗ Trùng số tập {n}: {', '.join(names)} — sửa tên file hoặc cột ep trong episodes.csv")
-            total_fail += 1
-            continue
-
-        # 1) Tạo phim (hoặc lấy lại id đã tạo lần trước)
-        movie_id = state.get(mdir.name)
+        # 1) phim: tìm theo tên thư mục, chưa có thì tạo
+        movie_id = by_title.get(plain(title))
         if movie_id:
-            r = s.get(f"{api}/api/movies/{movie_id}", timeout=30)
-            if r.status_code == 404:
-                movie_id = None
-        if not movie_id:
-            poster = next((mdir / f"{n}{e}" for n in ("poster", "cover", "bia") for e in IMAGE_EXT if (mdir / f"{n}{e}").exists()), None)
-            data = {k: info.get(k) or "" for k in ("subtitle", "description")}
-            data["title"] = title
+            detail = s.get(f"{api}/api/movies/{movie_id}", timeout=30).json()
+            has_video = {e["ep_number"] for e in detail["episodes"] if e.get("video_url")}
+            print(f"  = Phim đã có id={movie_id}, {len(has_video)} tập có video trên server")
+        else:
+            info = json.loads((mdir / "movie.json").read_text("utf-8")) if (mdir / "movie.json").exists() else {}
+            tags = info.get("tags") or []
+            if isinstance(tags, str):
+                tags = [t.strip() for t in tags.split(",")]
+            data = {"title": title, "description": info.get("description") or "",
+                    "tags": json.dumps([t for t in tags if t], ensure_ascii=False)}
             r = request_with_retry(
                 s, "POST", f"{api}/api/admin/movies", data=data,
                 files_factory=(lambda p=poster: {"poster": file_tuple(p)} if p else None),
@@ -259,26 +219,19 @@ def main():
                 total_fail += 1
                 continue
             movie_id = r.json()["movie"]["id"]
-            state[mdir.name] = movie_id
-            save_state()
+            by_title[plain(title)] = movie_id
+            has_video = set()
             print(f"  + Tạo phim id={movie_id}")
-            existing = set()
-        else:
-            # tập đã tạo từ Google Sheet nhưng chưa có video => vẫn upload video vào
-            existing = {e["ep_number"] for e in r.json()["episodes"] if e.get("video_url")}
-            print(f"  = Phim đã có id={movie_id}, {len(existing)} tập trên server")
 
-        # 2) Upload các tập
+        # 2) upload tập còn thiếu video
         for e in eps:
             n, v = e["ep"], e["video"]
-            if n in existing:
+            if n in has_video:
                 total_skip += 1
                 continue
             thumb = e["thumb"] or make_thumb(v, tmp)
-            duration = e["duration"] if e["duration"] is not None else probe_duration(v)
-            data = {"ep_number": str(n), "title": e["title"], "subtitle": e["subtitle"]}
-            if duration is not None:
-                data["duration"] = str(duration)
+            duration = probe_duration(v)
+            data = {"duration": str(duration)} if duration is not None else {}
 
             def factory(v=v, thumb=thumb):
                 f = {"video": file_tuple(v)}
@@ -290,18 +243,16 @@ def main():
             t0 = time.time()
             try:
                 r = request_with_retry(
-                    s, "POST", f"{api}/api/admin/movies/{movie_id}/episodes",
+                    s, "PUT", f"{api}/api/admin/movies/{movie_id}/episodes/{n}",
                     data=data, files_factory=factory,
                 )
             except Exception as ex:  # noqa: BLE001
                 print(f"  ✗ Tập {n}: {ex}")
                 total_fail += 1
                 continue
-            if r.status_code == 201:
+            if r.status_code in (200, 201):
                 total_ok += 1
-                print(f"  ✓ Tập {n:>3}  {size_mb:6.1f} MB  {time.time() - t0:5.1f}s  {e['title']}")
-            elif r.status_code == 409:
-                total_skip += 1
+                print(f"  ✓ Tập {n:>3}  {size_mb:6.1f} MB  {time.time() - t0:5.1f}s  {v.name}")
             else:
                 total_fail += 1
                 print(f"  ✗ Tập {n}: HTTP {r.status_code} {r.text[:200]}")
