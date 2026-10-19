@@ -20,7 +20,7 @@
   .card h2 { font-size:14px; margin:0 0 10px; }
   label { display:block; font-size:12px; color:var(--muted); margin:8px 0 3px; }
   label.inline { display:inline-flex; align-items:center; gap:6px; margin:0; color:var(--text); font-size:13px; }
-  input[type=text], input[type=number], input[type=password], textarea { width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:transparent; color:var(--text); font:inherit; }
+  input[type=text], input[type=number], input[type=password], textarea, select { width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:transparent; color:var(--text); font:inherit; }
   textarea { min-height:60px; resize:vertical; }
   button { padding:7px 12px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); cursor:pointer; font:inherit; white-space:nowrap; }
   button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
@@ -64,6 +64,18 @@
   <!-- ============ CỘT TRÁI ============ -->
   <section>
     <div class="card">
+      <h2>Đồng bộ từ Google Sheet</h2>
+      <div class="muted">Mỗi tab trong Sheet là 1 bộ phim. Sheet có bao nhiêu tập thì server có bấy nhiêu tập; video có trong thư mục thì upload, thiếu thì bổ sung lần sau.</div>
+      <label>Link Apps Script (…/exec)</label>
+      <input id="sheetUrl" type="text" placeholder="https://script.google.com/macros/s/.../exec">
+      <div class="row" style="margin-top:8px"><button id="sheetLoad" class="small">Tải sheet</button><span id="sheetMsg" class="muted"></span></div>
+      <label>Phim (tab trong Sheet)</label>
+      <select id="sheetTab"><option value="">— Bấm "Tải sheet" trước —</option></select>
+      <label>Thư mục video của phim (tuỳ chọn)</label>
+      <input id="syncFolder" type="file" webkitdirectory multiple>
+      <div class="row" style="margin-top:10px"><button id="syncPrepare" class="primary">Xem đối chiếu</button></div>
+    </div>
+    <div class="card">
       <h2>Tạo phim mới</h2>
       <form id="movieForm">
         <label>Tên phim *</label><input name="title" type="text" required>
@@ -81,6 +93,26 @@
 
   <!-- ============ CỘT PHẢI ============ -->
   <section>
+    <div id="syncPanel" class="card hidden" style="margin-bottom:16px">
+      <div class="row" style="justify-content:space-between">
+        <div><h2 id="syncTitle" style="margin:0"></h2><div id="syncSub" class="muted"></div></div>
+        <div class="row"><button id="syncRefresh" class="small">Đối chiếu lại</button><button id="syncClose" class="small">Đóng</button></div>
+      </div>
+      <div id="syncSummary" style="margin-top:8px"></div>
+      <div class="row" style="margin-top:8px">
+        <label class="inline"><input type="checkbox" id="syncReplaceAll"> Ghi đè video đã có trên server bằng video trong thư mục</label>
+      </div>
+      <div class="table-wrap" style="margin-top:10px">
+        <table>
+          <thead><tr><th>Tập</th><th>Tiêu đề</th><th>Tiêu đề phụ</th><th>Video trong thư mục</th><th>Trên server</th><th>Việc sẽ làm</th><th>Kết quả</th></tr></thead>
+          <tbody id="syncRows"></tbody>
+        </table>
+      </div>
+      <div id="syncExtra" class="muted" style="margin-top:8px"></div>
+      <div class="row" style="margin-top:10px"><button id="syncRun" class="primary">Đồng bộ</button><span id="syncMsg" class="muted"></span></div>
+      <div class="progress"><div id="syncProg"></div></div>
+    </div>
+
     <div id="empty" class="card muted">Chọn một phim bên trái để quản lý tập.</div>
 
     <div id="detail" class="hidden">
@@ -135,18 +167,19 @@
       <div class="card">
         <h2>Thêm nhiều tập cùng lúc</h2>
         <div class="muted">
-          Chọn nhiều file video (có thể chọn kèm ảnh thumbnail). Danh sách hiện ra để bạn kiểm tra và sửa trước khi upload.<br>
+          Chọn nhiều file video (có thể chọn kèm ảnh thumbnail), hoặc chọn cả thư mục. Danh sách hiện ra để bạn kiểm tra và sửa trước khi upload. Muốn lấy tiêu đề từ Google Sheet thì dùng mục <b>Đồng bộ từ Google Sheet</b>.<br>
           Số tập: nếu tên file có số (<code>ep_05.mp4</code>, <code>tap5.mp4</code>) thì lấy số cuối cùng; nếu không có số thì đánh tiếp theo thứ tự tên file.
           Ảnh có cùng số tập hoặc cùng tên với video được dùng làm thumbnail; không có ảnh thì tự cắt 1 khung hình từ video.
         </div>
         <div class="row" style="margin-top:10px">
-          <input id="bulkFiles" type="file" multiple accept="video/*,image/*">
+          <label class="inline">Chọn file: <input id="bulkFiles" type="file" multiple accept="video/*,image/*"></label>
+          <label class="inline">hoặc thư mục: <input id="bulkFolder" type="file" webkitdirectory multiple></label>
         </div>
         <div id="bulkPanel" class="hidden">
           <div class="row" style="margin-top:12px">
             <div class="grow"><label>Tiêu đề mẫu (<code>{n}</code> = số tập)</label><input id="tplTitle" type="text" value="Tập {n}"></div>
             <div class="grow"><label>Tiêu đề phụ mẫu (tuỳ chọn)</label><input id="tplSub" type="text" placeholder="vd: Tên phim - tập {n}"></div>
-            <div style="padding-top:22px"><button id="applyTpl" class="small">Áp dụng cho tất cả</button></div>
+            <div style="padding-top:22px"><button id="applyTpl" class="small">Áp dụng mẫu</button></div>
           </div>
           <div class="table-wrap" style="margin-top:10px">
             <table>
@@ -342,7 +375,7 @@ function renderEpisodes() {
       <td>${e.thumb ? `<img src="${esc(e.thumb)}" loading="lazy" alt="">` : `<div class="thumb-ph"></div>`}</td>
       <td>${esc(e.title)}<div class="muted">${esc(e.subtitle || "")}</div></td>
       <td>${fmtDur(e.duration)}</td>
-      <td><a href="${esc(e.video_url)}" target="_blank">Mở</a></td>
+      <td>${e.video_url ? `<a href="${esc(e.video_url)}" target="_blank">Mở</a>` : `<span class="st-err">Chưa có video</span>`}</td>
       <td><div class="row"><button class="small" data-edit="${e.id}">Sửa</button><button class="small danger" data-del="${e.id}">Xoá</button></div></td>
     </tr>`).join("");
   document.querySelectorAll("[data-del]").forEach((b) => b.onclick = async () => {
@@ -430,6 +463,19 @@ epForm.onsubmit = async (ev) => {
   btn.disabled = false;
 };
 
+// ------------------------------------------------------------------ tiện ích dùng chung
+/** Bỏ dấu tiếng Việt, chữ thường — để so tên cột / tên phim. */
+const plain = (s) => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/gi, "d").toLowerCase().trim();
+
+/** Bỏ file ẩn (.DS_Store...) và file nằm trong thư mục con khi chọn cả thư mục. */
+function topLevelFiles(fileList) {
+  const files = [...fileList].filter((f) => !f.name.startsWith("."));
+  const depth = (f) => (f.webkitRelativePath || f.name).split("/").length;
+  const min = Math.min(...files.map(depth));
+  return files.filter((f) => depth(f) === min);
+}
+const isPoster = (f) => /^(poster|cover|bia)$/i.test(stem(f.name));
+
 // ------------------------------------------------------------------ thêm nhiều tập
 /**
  * Ghép video + ảnh, đánh số tập.
@@ -439,7 +485,7 @@ epForm.onsubmit = async (ev) => {
  */
 function buildRows(files, existingMax) {
   const videos = files.filter(isVideo).sort((a, b) => natural.compare(a.name, b.name));
-  const images = files.filter((f) => !isVideo(f) && isImage(f));
+  const images = files.filter((f) => !isVideo(f) && isImage(f) && !isPoster(f));
   const byStem = new Map(images.map((f) => [stem(f.name).toLowerCase(), f]));
   const byNum = new Map();
   for (const f of images) { const n = lastNumber(f.name); if (n != null && !byNum.has(n)) byNum.set(n, f); }
@@ -451,11 +497,13 @@ function buildRows(files, existingMax) {
     r.thumbFile = byStem.get(stem(r.file.name).toLowerCase()) || (r.fromName ? byNum.get(r.ep) : null) || null;
     r.autoThumb = null; r.duration = null; r.subtitle = ""; r.status = ""; r.title = "";
   }
-  return rows;
+  return rows.sort((a, b) => a.ep - b.ep);
 }
 
-$("#bulkFiles").onchange = async () => {
-  const files = [...$("#bulkFiles").files];
+$("#bulkFiles").onchange = () => loadBulk([...$("#bulkFiles").files].filter((f) => !f.name.startsWith(".")));
+$("#bulkFolder").onchange = () => loadBulk(topLevelFiles($("#bulkFolder").files));
+
+async function loadBulk(files) {
   if (!files.length) return;
   bulkRows = buildRows(files, maxEp());
   if (!bulkRows.length) { alert("Chưa chọn file video nào"); return; }
@@ -473,7 +521,7 @@ $("#bulkFiles").onchange = async () => {
     r.status = "";
     renderBulkRow(r);
   }
-};
+}
 
 function applyTemplate() {
   const t = $("#tplTitle").value, s = $("#tplSub").value;
@@ -484,7 +532,7 @@ $("#applyTpl").onclick = () => { applyTemplate(); renderBulk(); };
 function refreshBulkNumbers() { if (bulkRows.length) renderBulk(); }
 
 function dupSet() {
-  const taken = new Set(currentEps.map((e) => e.ep_number));
+  const taken = new Set(currentEps.filter((e) => e.video_url).map((e) => e.ep_number));   // tập chưa có video: được điền
   const seen = new Map();
   for (const r of bulkRows) seen.set(r.ep, (seen.get(r.ep) || 0) + 1);
   return (r) => !r.ep || r.ep < 1 || taken.has(r.ep) || seen.get(r.ep) > 1;
@@ -543,7 +591,7 @@ function markDup() {
 }
 
 function clearBulk() {
-  bulkRows = []; $("#bulkRows").innerHTML = ""; $("#bulkFiles").value = "";
+  bulkRows = []; $("#bulkRows").innerHTML = ""; $("#bulkFiles").value = ""; $("#bulkFolder").value = "";
   $("#bulkPanel").classList.add("hidden"); $("#bulkProg").style.width = "0"; $("#bulkMsg").textContent = "";
 }
 $("#bulkClear").onclick = clearBulk;
@@ -578,6 +626,248 @@ $("#bulkStart").onclick = async () => {
   currentEps = data.episodes; renderEpisodes(); loadMovies();
   const fails = bulkRows.filter((r) => r.status.startsWith("✗")).length;
   $("#bulkMsg").textContent = fails ? `${fails} tập lỗi — sửa rồi bấm Upload tất cả để thử lại các tập lỗi` : "✓ Đã upload xong tất cả";
+};
+
+// ------------------------------------------------------------------ đồng bộ Google Sheet
+/**
+ * Bố cục 1 tab:
+ *   Tên phim     | Tình Yêu Bất Tận        (các dòng thông tin phim, phía trên bảng tập; tuỳ chọn)
+ *   Tiêu đề phụ  | Ngôn tình
+ *   Mô tả        | ...
+ *   ep | title | subtitle | video | thumb | duration      (dòng tiêu đề cột: bắt buộc có cột ep/Tập)
+ *   1  | ...
+ * Tên cột tiếng Việt cũng được: Tập, Tiêu đề, Tiêu đề phụ, Video, Ảnh, Thời lượng, Tên phim.
+ * Không có dòng "Tên phim" => lấy cột "Tên phim" trong bảng, nếu không có nữa => tên tab.
+ */
+const SHEET_COLS = {
+  ep: ["ep", "tap", "so tap", "tap so", "episode"],
+  title: ["title", "tieu de", "ten tap"],
+  subtitle: ["subtitle", "tieu de phu", "phu de"],
+  video: ["video", "file", "file video", "ten file", "video file"],
+  thumb: ["thumb", "thumbnail", "anh", "anh tap"],
+  duration: ["duration", "thoi luong"],
+  movie: ["movie", "phim", "ten phim"],
+};
+const SHEET_MOVIE_KEYS = {
+  title: ["title", "name", "ten phim", "ten", "phim", "movie"],
+  subtitle: ["subtitle", "tieu de phu", "phu de"],
+  description: ["description", "mo ta", "noi dung", "gioi thieu"],
+};
+let sheetData = [];
+let sync = null;
+try { $("#sheetUrl").value = localStorage.getItem("sheet_url") || ""; } catch {}
+
+function parseSheetTab(tab) {
+  const values = (tab.values || []).map((r) => r.map((c) => String(c ?? "").trim()));
+  const res = { sheet: tab.sheet, movie: {}, rows: [], warnings: [] };
+  const colOf = (name) => { const k = plain(name).replace(/[:.]$/, ""); for (const [c, a] of Object.entries(SHEET_COLS)) if (a.includes(k)) return c; return null; };
+  const h = values.findIndex((r) => r.some((c) => colOf(c) === "ep"));
+  for (let i = 0; i < (h < 0 ? values.length : h); i++) {
+    const key = plain(values[i][0]).replace(/[:.]$/, "");
+    const val = values[i][1] || "";
+    for (const [field, names] of Object.entries(SHEET_MOVIE_KEYS)) if (names.includes(key) && val) res.movie[field] = val;
+  }
+  if (h < 0) res.warnings.push('Không thấy dòng tiêu đề cột (cần có cột "ep" hoặc "Tập")');
+  else {
+    const map = values[h].map(colOf);
+    let prev = 0;
+    for (let i = h + 1; i < values.length; i++) {
+      const r = values[i];
+      const get = (k) => (map.indexOf(k) >= 0 ? r[map.indexOf(k)] || "" : "");
+      if (!r.some(Boolean)) continue;
+      const m = plain(get("ep")).match(/(\d+)/);
+      const title = get("title"), subtitle = get("subtitle");
+      if (!m && !title && !subtitle) continue;
+      const ep = m ? Number(m[1]) : prev + 1;
+      prev = ep;
+      if (!res.movie.title && get("movie")) res.movie.title = get("movie");
+      const dur = get("duration");
+      res.rows.push({ ep, title, subtitle, video: get("video"), thumb: get("thumb"), duration: /^\d+$/.test(dur) ? Number(dur) : null });
+    }
+    const seen = new Set();
+    for (const r of res.rows) { if (seen.has(r.ep)) res.warnings.push(`Tập ${r.ep} bị lặp trong sheet (dòng sau sẽ ghi đè dòng trước)`); seen.add(r.ep); }
+  }
+  if (!res.movie.title) res.movie.title = tab.sheet;
+  return res;
+}
+
+$("#sheetLoad").onclick = async () => {
+  const u = $("#sheetUrl").value.trim();
+  if (!u) return alert("Dán link Apps Script trước");
+  try { localStorage.setItem("sheet_url", u); } catch {}
+  $("#sheetMsg").textContent = "Đang tải...";
+  try {
+    const data = await api("/api/admin/sheet?url=" + encodeURIComponent(u));
+    sheetData = (data.sheets || []).map(parseSheetTab);
+    $("#sheetTab").innerHTML = sheetData.map((s, i) =>
+      `<option value="${i}">${esc(s.movie.title)} (${s.rows.length} tập)${s.sheet !== s.movie.title ? " · tab " + esc(s.sheet) : ""}</option>`).join("")
+      || `<option value="">Sheet không có tab nào</option>`;
+    $("#sheetMsg").textContent = `✓ ${sheetData.length} phim`;
+  } catch (e) { $("#sheetMsg").textContent = "✗ " + e.message; }
+};
+
+/** Ghép video/ảnh trong thư mục với từng dòng của sheet. */
+function matchLocal(rows, files) {
+  const videos = files.filter(isVideo).sort((a, b) => natural.compare(a.name, b.name));
+  const images = files.filter((f) => !isVideo(f) && isImage(f) && !isPoster(f));
+  const key = (n) => n.toLowerCase();
+  const vidByName = new Map(); for (const f of videos) { vidByName.set(key(f.name), f); vidByName.set(key(stem(f.name)), f); }
+  const imgByName = new Map(); for (const f of images) { imgByName.set(key(f.name), f); imgByName.set(key(stem(f.name)), f); }
+  const imgByNum = new Map(); for (const f of images) { const n = lastNumber(f.name); if (n != null && !imgByNum.has(n)) imgByNum.set(n, f); }
+  const out = new Map(), used = new Set();
+  const take = (ep, f) => { out.set(ep, { video: f }); used.add(f); };
+  // 1) sheet ghi rõ tên file
+  for (const r of rows) if (r.video) { const f = vidByName.get(key(r.video)) || vidByName.get(key(stem(r.video))); if (f && !used.has(f)) take(r.ep, f); }
+  // 2) số trong tên file = số tập
+  for (const r of rows) if (!r.video && !out.has(r.ep)) { const f = videos.find((v) => !used.has(v) && lastNumber(v.name) === r.ep); if (f) take(r.ep, f); }
+  // 3) cả thư mục không file nào có số: ghép theo thứ tự tên file với các tập còn trống
+  //    (thư mục lẫn file có số và không số => file không số coi là "không khớp", tránh ghép nhầm trailer...)
+  const leftover = videos.filter((f) => !used.has(f) && lastNumber(f.name) == null);
+  let byOrder = 0;
+  if (!videos.some((f) => lastNumber(f.name) != null)) {
+    rows.filter((r) => !r.video && !out.has(r.ep)).forEach((r, i) => { if (leftover[i]) { take(r.ep, leftover[i]); byOrder++; } });
+  }
+  // thumbnail: cột thumb trong sheet > ảnh cùng tên video > ảnh cùng số tập
+  for (const r of rows) {
+    const o = out.get(r.ep) || {};
+    o.thumb = (r.thumb && (imgByName.get(key(r.thumb)) || imgByName.get(key(stem(r.thumb)))))
+      || (o.video && imgByName.get(key(stem(o.video.name))))
+      || (o.video && lastNumber(o.video.name) === r.ep ? imgByNum.get(r.ep) : null) || null;
+    if (o.video || o.thumb) out.set(r.ep, o);
+  }
+  return { map: out, unused: videos.filter((f) => !used.has(f)), byOrder };
+}
+
+$("#syncPrepare").onclick = () => prepareSync();
+$("#syncRefresh").onclick = () => prepareSync();
+$("#syncClose").onclick = () => { $("#syncPanel").classList.add("hidden"); sync = null; };
+$("#syncReplaceAll").onchange = () => sync && renderSync();
+
+async function prepareSync(keepMsg) {
+  const tab = sheetData[Number($("#sheetTab").value)];
+  if (!tab) return alert('Bấm "Tải sheet" rồi chọn phim trước');
+  const files = $("#syncFolder").files.length ? topLevelFiles($("#syncFolder").files) : [];
+  const index = await fetch("/api/movies/index", { headers: { authorization: "Bearer " + TOKEN } }).then((r) => r.json());
+  const found = (index.movies || []).find((m) => plain(m.title) === plain(tab.movie.title));
+  let serverMovie = null; const serverEps = new Map();
+  if (found) {
+    const d = await fetch("/api/movies/" + found.id).then((r) => r.json());
+    serverMovie = d.movie;
+    for (const e of d.episodes) serverEps.set(e.ep_number, e);
+  }
+  const match = matchLocal(tab.rows, files);
+  const old = sync;
+  sync = {
+    tab, files, serverMovie, serverEps, match,
+    poster: files.find((f) => isImage(f) && isPoster(f)) || null,
+    rows: tab.rows.map((r) => ({ ...r, local: match.map.get(r.ep) || {}, server: serverEps.get(r.ep) || null,
+      replace: !!old?.rows.find((o) => o.ep === r.ep && o.replace), status: "" })),
+  };
+  if (!keepMsg) $("#syncMsg").textContent = "";
+  renderSync();
+  $("#syncPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function rowPlan(r) {
+  const s = r.server;
+  const replace = $("#syncReplaceAll").checked || r.replace;
+  const title = r.title || `Tập ${r.ep}`;
+  const info = !s || title !== s.title || (r.subtitle || "") !== (s.subtitle || "") || (r.duration != null && r.duration !== s.duration);
+  const video = !!r.local.video && (!s || !s.video_url || replace);
+  const thumb = !!r.local.thumb && (video || !s || !s.thumb || replace);
+  return { create: !s, info, video, thumb, needs: info || video || thumb, missingAfter: !video && !(s && s.video_url) };
+}
+
+function renderSync() {
+  const { tab, serverMovie, serverEps, match } = sync;
+  $("#syncPanel").classList.remove("hidden");
+  $("#syncTitle").textContent = tab.movie.title;
+  $("#syncSub").textContent = (serverMovie ? `Đã có trên server (#${serverMovie.id}, ${serverMovie.episode_count} tập)` : "Phim mới: sẽ được tạo khi đồng bộ")
+    + (tab.movie.subtitle ? " · " + tab.movie.subtitle : "") + (sync.poster ? ` · poster: ${sync.poster.name}` : "");
+  let nCreate = 0, nInfo = 0, nVideo = 0, nMissing = 0;
+  $("#syncRows").innerHTML = sync.rows.map((r, i) => {
+    const p = rowPlan(r), s = r.server;
+    if (p.create) nCreate++; else if (p.info) nInfo++;
+    if (p.video) nVideo++;
+    if (p.missingAfter) nMissing++;
+    const what = [p.create ? "Tạo tập" : p.info ? "Cập nhật thông tin" : "", p.video ? "upload video" : "", p.thumb && !p.video ? "thumbnail" : ""]
+      .filter(Boolean).join(" + ") || '<span class="muted">Không đổi</span>';
+    const localCell = r.local.video ? esc(r.local.video.name)
+      : r.video ? `<span class="st-err">Không thấy ${esc(r.video)}</span>` : '<span class="muted">—</span>';
+    const serverCell = !s ? '<span class="muted">Chưa có</span>' : s.video_url ? '<span class="st-ok">Có video</span>' : '<span class="st-err">Có tập, chưa có video</span>';
+    const rep = r.local.video && s && s.video_url
+      ? ` <label class="inline muted"><input type="checkbox" data-rep="${i}" ${r.replace ? "checked" : ""}> ghi đè</label>` : "";
+    const st = r.status, cls = st.startsWith("✓") ? "st-ok" : st.startsWith("✗") ? "st-err" : "muted";
+    return `<tr><td>${r.ep}</td><td>${esc(r.title || `Tập ${r.ep}`)}</td><td>${esc(r.subtitle)}</td><td><div class="fname" title="${esc(r.local.video?.name || "")}">${localCell}</div></td>
+      <td>${serverCell}</td><td>${what}${p.missingAfter ? ' <span class="muted">(chưa có video)</span>' : ""}${rep}</td><td class="${cls}">${esc(st)}</td></tr>`;
+  }).join("");
+  document.querySelectorAll("[data-rep]").forEach((cb) => cb.onchange = () => { sync.rows[Number(cb.dataset.rep)].replace = cb.checked; renderSync(); });
+
+  $("#syncSummary").innerHTML = `Sheet có <b>${sync.rows.length}</b> tập · tạo mới <b>${nCreate}</b> · cập nhật thông tin <b>${nInfo}</b> · upload video <b>${nVideo}</b>`
+    + (nMissing ? ` · <span class="st-err">${nMissing} tập vẫn chưa có video sau lần này</span>` : ' · <span class="st-ok">đủ video</span>');
+  const extra = [...tab.warnings];
+  if (match.unused.length) extra.push(`${match.unused.length} video trong thư mục không khớp tập nào trong sheet: ${match.unused.slice(0, 8).map((f) => f.name).join(", ")}${match.unused.length > 8 ? "…" : ""}`);
+  if (match.byOrder) extra.push(`${match.byOrder} video không có số trong tên được ghép theo thứ tự tên file — kiểm tra lại cột "Video trong thư mục"`);
+  const notInSheet = [...serverEps.keys()].filter((n) => !sync.rows.some((r) => r.ep === n));
+  if (notInSheet.length) extra.push(`Server có ${notInSheet.length} tập không có trong sheet (giữ nguyên): ${notInSheet.slice(0, 10).join(", ")}${notInSheet.length > 10 ? "…" : ""}`);
+  $("#syncExtra").innerHTML = extra.map((x) => "• " + esc(x)).join("<br>");
+}
+
+$("#syncRun").onclick = async () => {
+  if (!sync) return;
+  const btn = $("#syncRun"); btn.disabled = true;
+  const { tab } = sync;
+  let ok = 0, fail = 0;
+  try {
+    // 1) phim: tạo mới hoặc cập nhật thông tin
+    let movieId = sync.serverMovie?.id;
+    const mv = tab.movie;
+    if (!movieId) {
+      const fd = new FormData();
+      fd.append("title", mv.title); fd.append("subtitle", mv.subtitle || ""); fd.append("description", mv.description || "");
+      if (sync.poster) fd.append("poster", sync.poster);
+      $("#syncMsg").textContent = "Đang tạo phim...";
+      movieId = (await upload("POST", "/api/admin/movies", fd)).movie.id;
+    } else {
+      const sm = sync.serverMovie, fd = new FormData();
+      let changed = false;
+      if (mv.subtitle != null && (mv.subtitle || "") !== (sm.subtitle || "")) { fd.append("subtitle", mv.subtitle); changed = true; }
+      if (mv.description != null && (mv.description || "") !== (sm.description || "")) { fd.append("description", mv.description); changed = true; }
+      if (sync.poster && !sm.poster) { fd.append("poster", sync.poster); changed = true; }
+      if (changed) await upload("PATCH", "/api/admin/movies/" + movieId, fd);
+    }
+    // 2) từng tập: tạo/cập nhật + upload video còn thiếu
+    const todo = sync.rows.filter((r) => rowPlan(r).needs);
+    for (let i = 0; i < todo.length; i++) {
+      const r = todo[i], p = rowPlan(r), fd = new FormData();
+      fd.append("title", r.title || ""); fd.append("subtitle", r.subtitle || "");
+      if (r.duration != null) fd.append("duration", r.duration);
+      if (p.video) {
+        r.status = "Đang đọc video..."; renderSync();
+        const { duration, thumb } = await probeVideo(r.local.video, !r.local.thumb);
+        if (r.duration == null && duration != null) fd.append("duration", duration);
+        fd.append("video", r.local.video);
+        if (r.local.thumb) fd.append("thumb", r.local.thumb); else if (thumb) fd.append("thumb", thumb);
+      } else if (p.thumb) fd.append("thumb", r.local.thumb);
+      r.status = p.video ? "Đang upload..." : "Đang lưu..."; renderSync();
+      try {
+        await upload("PUT", `/api/admin/movies/${movieId}/episodes/${r.ep}`, fd,
+          (x) => $("#syncProg").style.width = Math.round((i + x) / todo.length * 100) + "%");
+        r.status = "✓ Xong"; ok++;
+      } catch (e) { r.status = "✗ " + e.message; fail++; }
+      $("#syncProg").style.width = Math.round((i + 1) / todo.length * 100) + "%";
+      renderSync();
+    }
+    const failed = new Map(sync.rows.filter((r) => r.status.startsWith("✗")).map((r) => [r.ep, r.status]));
+    await prepareSync(true);   // lấy lại trạng thái server để thấy kết quả thật
+    for (const r of sync.rows) if (failed.has(r.ep)) r.status = failed.get(r.ep);
+    renderSync();
+    $("#syncMsg").textContent = fail ? `${ok} tập xong, ${fail} tập lỗi — bấm Đồng bộ để thử lại` : `✓ Đồng bộ xong ${ok} tập`;
+    loadMovies();
+    if (current === movieId) openMovie(movieId);
+  } catch (e) { $("#syncMsg").textContent = "✗ " + e.message; }
+  $("#syncProg").style.width = "0";
+  btn.disabled = false;
 };
 
 loadMovies();

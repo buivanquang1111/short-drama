@@ -117,7 +117,7 @@ def plan_episodes(mdir: Path):
     """Ghép video + thumbnail + thông tin csv, đánh số tập. Trả về list dict, đã sắp theo số tập."""
     files = [p for p in mdir.iterdir() if p.is_file() and not p.name.startswith(".")]
     videos = sorted((p for p in files if p.suffix.lower() in VIDEO_EXT), key=lambda p: natural_key(p.name))
-    images = [p for p in files if p.suffix.lower() in IMAGE_EXT and not p.stem.lower().startswith("poster")]
+    images = [p for p in files if p.suffix.lower() in IMAGE_EXT and p.stem.lower() not in ("poster", "cover", "bia")]
     by_stem = {p.stem.lower(): p for p in images}
     by_num = {}
     for p in images:
@@ -129,7 +129,7 @@ def plan_episodes(mdir: Path):
     eps = []
     for v in videos:
         m = meta.get(v.name.lower(), {})
-        csv_ep = int(m["ep"]) if m.get("ep", "").isdigit() else None
+        csv_ep = int(m["ep"]) if str(m.get("ep") or "").isdigit() else None
         name_ep = last_number(v.name)
         eps.append({"video": v, "meta": m, "ep": csv_ep or name_ep, "numbered": (csv_ep or name_ep) is not None})
 
@@ -145,7 +145,7 @@ def plan_episodes(mdir: Path):
         e["thumb"] = by_stem.get(v.stem.lower()) or (by_num.get(e["ep"]) if e["numbered"] else None)
         e["title"] = m.get("title") or f"Tập {e['ep']}"
         e["subtitle"] = m.get("subtitle") or ""
-        e["duration"] = int(m["duration"]) if m.get("duration", "").isdigit() else None
+        e["duration"] = int(m["duration"]) if str(m.get("duration") or "").isdigit() else None
     eps.sort(key=lambda e: e["ep"])
 
     seen = {}
@@ -247,7 +247,7 @@ def main():
             if r.status_code == 404:
                 movie_id = None
         if not movie_id:
-            poster = next((mdir / f"poster{e}" for e in IMAGE_EXT if (mdir / f"poster{e}").exists()), None)
+            poster = next((mdir / f"{n}{e}" for n in ("poster", "cover", "bia") for e in IMAGE_EXT if (mdir / f"{n}{e}").exists()), None)
             data = {k: info.get(k) or "" for k in ("subtitle", "description")}
             data["title"] = title
             r = request_with_retry(
@@ -264,7 +264,8 @@ def main():
             print(f"  + Tạo phim id={movie_id}")
             existing = set()
         else:
-            existing = {e["ep_number"] for e in r.json()["episodes"]}
+            # tập đã tạo từ Google Sheet nhưng chưa có video => vẫn upload video vào
+            existing = {e["ep_number"] for e in r.json()["episodes"] if e.get("video_url")}
             print(f"  = Phim đã có id={movie_id}, {len(existing)} tập trên server")
 
         # 2) Upload các tập

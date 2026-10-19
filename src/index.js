@@ -14,6 +14,8 @@
  *   PATCH  /api/admin/movies/:id                   sửa phim (multipart, field nào gửi thì sửa field đó)
  *   DELETE /api/admin/movies/:id                   xoá phim + toàn bộ tập + file trên R2
  *   POST   /api/admin/movies/:id/episodes          thêm tập (multipart: ep_number, title, subtitle, duration, video, thumb)
+ *   PUT    /api/admin/movies/:id/episodes/:ep      tạo hoặc cập nhật tập số :ep (video không bắt buộc) — dùng khi đồng bộ từ Google Sheet
+ *   GET    /api/admin/sheet?url=<Apps Script URL>  đọc dữ liệu Google Sheet qua Apps Script (tránh lỗi CORS)
  *   PATCH  /api/admin/episodes/:id                 sửa tập
  *   DELETE /api/admin/episodes/:id                 xoá tập + file trên R2
  *
@@ -24,7 +26,7 @@
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 const CORS_HEADERS = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET,HEAD,POST,PATCH,DELETE,OPTIONS",
+  "access-control-allow-methods": "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS",
   "access-control-allow-headers": "authorization,content-type,range",
   "access-control-expose-headers": "content-length,content-range,accept-ranges,etag",
 };
@@ -62,8 +64,10 @@ async function route(request, env, ctx) {
 
   // Public API
   if (method === "GET" && path === "/api/movies") return listMovies(url, env);
-  if (method === "GET" && path === "/api/movies/index") return cached(request, ctx, 300, () => movieIndex(url, env));
-  if (method === "GET" && path === "/api/search") return cached(request, ctx, 60, () => searchMovies(url, env));
+  // Admin (có ADMIN_TOKEN) luôn đọc dữ liệu mới, không qua cache — tránh tạo trùng phim khi đồng bộ
+  const fresh = await hasAdminToken(request, env);
+  if (method === "GET" && path === "/api/movies/index") return fresh ? movieIndex(url, env) : cached(url, ctx, 300, () => movieIndex(url, env));
+  if (method === "GET" && path === "/api/search") return fresh ? searchMovies(url, env) : cached(url, ctx, 60, () => searchMovies(url, env));
   if (method === "GET" && (m = path.match(/^\/api\/movies\/(\d+)$/))) return getMovie(Number(m[1]), url, env);
   if (method === "GET" && (m = path.match(/^\/api\/episodes\/(\d+)$/))) return getEpisode(Number(m[1]), url, env);
 
@@ -79,6 +83,10 @@ async function route(request, env, ctx) {
     if (method === "POST" && (m = path.match(/^\/api\/admin\/movies\/(\d+)\/episodes$/))) {
       return createEpisode(Number(m[1]), request, url, env);
     }
+    if (method === "PUT" && (m = path.match(/^\/api\/admin\/movies\/(\d+)\/episodes\/(\d+)$/))) {
+      return upsertEpisode(Number(m[1]), Number(m[2]), request, url, env);
+    }
+    if (method === "GET" && path === "/api/admin/sheet") return proxySheet(url, env);
     if ((m = path.match(/^\/api\/admin\/episodes\/(\d+)$/))) {
       if (method === "PATCH") return updateEpisode(Number(m[1]), request, url, env);
       if (method === "DELETE") return deleteEpisode(Number(m[1]), env);
@@ -191,8 +199,8 @@ function normalizeText(s) {
  * (vd api.tenmien.com); trên *.workers.dev cache bị bỏ qua nhưng API vẫn chạy bình thường.
  * Header cache-control giúp HTTP client của app (OkHttp, Dio...) cũng cache được.
  */
-async function cached(request, ctx, ttl, build) {
-  const key = new Request(new URL(request.url).toString(), { method: "GET" });
+async function cached(url, ctx, ttl, build) {
+  const key = new Request(url.toString(), { method: "GET" });
   let cache = null;
   try { cache = caches.default; } catch {}
   if (cache) {
@@ -293,9 +301,10 @@ async function createEpisode(movieId, request, url, env) {
   if (!video) throw new HttpError(400, "video file is required");
 
   const exists = await env.DB.prepare(
-    "SELECT id FROM episodes WHERE movie_id = ?1 AND ep_number = ?2"
+    "SELECT id, video_key FROM episodes WHERE movie_id = ?1 AND ep_number = ?2"
   ).bind(movieId, epNumber).first();
-  if (exists) throw new HttpError(409, `Episode ${epNumber} already exists (id ${exists.id}), use PATCH to replace`);
+  if (exists && exists.video_key) throw new HttpError(409, `Episode ${epNumber} already exists (id ${exists.id}), use PATCH to replace`);
+  if (exists) return saveEpisode(movieId, epNumber, form, url, env);   // tập đã tạo từ Sheet nhưng chưa có video => điền video
 
   const ep2 = String(epNumber).padStart(2, "0");
   const videoKey = await putFile(env, `movies/${movieId}/ep_${ep2}`, video);
@@ -315,6 +324,72 @@ async function createEpisode(movieId, request, url, env) {
     await deleteKeys(env, [videoKey, thumbKey]);
     throw err;
   }
+}
+
+/** PUT: tạo hoặc cập nhật tập theo (phim, số tập). Field nào gửi lên thì cập nhật field đó. */
+async function upsertEpisode(movieId, epNumber, request, url, env) {
+  if (epNumber < 1) throw new HttpError(400, "ep_number must be >= 1");
+  const movie = await env.DB.prepare("SELECT id FROM movies WHERE id = ?1").bind(movieId).first();
+  if (!movie) throw new HttpError(404, "Movie not found");
+  return saveEpisode(movieId, epNumber, await request.formData(), url, env);
+}
+
+async function saveEpisode(movieId, epNumber, form, url, env) {
+  const old = await env.DB.prepare(
+    "SELECT * FROM episodes WHERE movie_id = ?1 AND ep_number = ?2"
+  ).bind(movieId, epNumber).first();
+
+  const ep2 = String(epNumber).padStart(2, "0");
+  const video = fileOrNull(form.get("video"));
+  const thumb = fileOrNull(form.get("thumb"));
+  const newVideoKey = video ? await putFile(env, `movies/${movieId}/ep_${ep2}`, video) : null;
+  const newThumbKey = thumb ? await putFile(env, `movies/${movieId}/ep_${ep2}_thumb`, thumb) : null;
+
+  const pick = (field, parse, fallback) => (form.has(field) ? parse(form.get(field)) : fallback);
+  const title = pick("title", str, old?.title) || `Tập ${epNumber}`;
+  const subtitle = pick("subtitle", str, old?.subtitle ?? null);
+  const duration = pick("duration", intOrNull, old?.duration ?? null);
+  const videoKey = newVideoKey || old?.video_key || null;
+  const thumbKey = newThumbKey || old?.thumb_key || null;
+
+  let row;
+  try {
+    if (old) {
+      row = await env.DB.prepare(
+        "UPDATE episodes SET title=?1, subtitle=?2, duration=?3, video_key=?4, thumb_key=?5 WHERE id=?6 RETURNING *"
+      ).bind(title, subtitle, duration, videoKey, thumbKey, old.id).first();
+    } else {
+      row = await env.DB.prepare(
+        `INSERT INTO episodes (movie_id, ep_number, title, subtitle, thumb_key, video_key, duration)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING *`
+      ).bind(movieId, epNumber, title, subtitle, thumbKey, videoKey, duration).first();
+      await refreshEpisodeCount(env, movieId);
+    }
+  } catch (err) {
+    await deleteKeys(env, [newVideoKey, newThumbKey]);
+    throw err;
+  }
+  // xoá file cũ đã bị thay
+  await deleteKeys(env, [newVideoKey && old?.video_key, newThumbKey && old?.thumb_key]);
+  return json({ episode: episodeDto(row, mediaBase(url, env)), created: !old }, old ? 200 : 201);
+}
+
+/** Đọc JSON từ Apps Script web app (script.google.com) phía server, tránh lỗi CORS trên trình duyệt. */
+async function proxySheet(url, env) {
+  const target = url.searchParams.get("url") || env.SHEET_URL || "";
+  let u;
+  try { u = new URL(target); } catch { throw new HttpError(400, "Thiếu hoặc sai link Apps Script"); }
+  if (u.protocol !== "https:" || !/^script\.google(usercontent)?\.com$/.test(u.hostname)) {
+    throw new HttpError(400, "Chỉ chấp nhận link Apps Script dạng https://script.google.com/macros/s/.../exec");
+  }
+  const res = await fetch(u.toString(), { redirect: "follow" });
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch {
+    throw new HttpError(502, "Apps Script không trả JSON. Kiểm tra lại quyền truy cập (Anyone) và link /exec");
+  }
+  if (!res.ok || data.error) throw new HttpError(502, data.error || `Apps Script HTTP ${res.status}`);
+  return json(data);
 }
 
 async function updateEpisode(id, request, url, env) {
@@ -489,6 +564,14 @@ function guessType(ext) {
       ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp" }[ext] ||
     "application/octet-stream"
   );
+}
+
+async function hasAdminToken(request, env) {
+  const auth = request.headers.get("authorization") || "";
+  if (!env.ADMIN_TOKEN || !auth.startsWith("Bearer ")) return false;
+  const enc = new TextEncoder();
+  const a = enc.encode(auth.slice(7)), b = enc.encode(env.ADMIN_TOKEN);
+  return a.byteLength === b.byteLength && crypto.subtle.timingSafeEqual(a, b);
 }
 
 async function requireAdmin(request, env) {
