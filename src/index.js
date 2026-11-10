@@ -142,7 +142,7 @@ async function getMovie(id, url, env) {
 /** Toàn bộ phim, chỉ trường cần cho danh sách + search trên máy. Đọc đúng số dòng = số phim. */
 async function movieIndex(url, env) {
   const { results } = await env.DB.prepare(
-    "SELECT id, title, tags, poster_key, episode_count FROM movies ORDER BY id DESC"
+    "SELECT id, title, tags, description, poster_key, episode_count FROM movies ORDER BY id DESC"
   ).all();
   const base = mediaBase(url, env);
   return json({
@@ -151,6 +151,7 @@ async function movieIndex(url, env) {
       id: r.id,
       title: r.title,
       tags: parseTags(r.tags),
+      description: r.description,
       poster: keyToUrl(r.poster_key, base),
       episode_count: r.episode_count,
     })),
