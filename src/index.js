@@ -19,6 +19,12 @@
  *   PATCH  /api/admin/episodes/:id                 sửa tập
  *   DELETE /api/admin/episodes/:id                 xoá tập + file trên R2
  *
+ * Bảo mật app (giống livescore) — app gửi qua Dio interceptor:
+ *   GET /x/<token>                                  token = AES-GCM("<path thật>?<query>|<timestamp>"), base64url
+ *   header X-Auth                                   AES-GCM("<timestamp>|<HMAC-SHA256(timestamp)>"), base64
+ *   Secret: APP_ENC_KEY (hex), APP_HMAC_SECRET.  Biến REQUIRE_APP_AUTH = "true" => chặn gọi thẳng /api/... (trừ admin có ADMIN_TOKEN)
+ *   Sau khi giải mã, request chạy như gọi thẳng đường dẫn thật => dùng chung cache với đường dẫn thật.
+ *
  * Media (dùng khi chưa gắn custom domain cho R2):
  *   GET/HEAD /media/<key>                          phát file từ R2, hỗ trợ Range (tua video)
  */
@@ -27,7 +33,7 @@ const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 const CORS_HEADERS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS",
-  "access-control-allow-headers": "authorization,content-type,range",
+  "access-control-allow-headers": "authorization,content-type,range,x-auth",
   "access-control-expose-headers": "content-length,content-range,accept-ranges,etag",
 };
 
@@ -52,20 +58,37 @@ export default {
 // ---------------------------------------------------------------- router
 
 async function route(request, env, ctx) {
-  const url = new URL(request.url);
-  const path = url.pathname.replace(/\/+$/, "") || "/";
+  let url = new URL(request.url);
+  let path = url.pathname.replace(/\/+$/, "") || "/";
   const method = request.method;
   let m;
+
+  // App gọi qua /x/<token>: giải mã ra đường dẫn thật + kiểm tra X-Auth, rồi xử lý như gọi thẳng.
+  // url được thay bằng URL thật => cached() dùng URL thật làm khoá => mọi token dùng chung 1 bản cache.
+  let appAuthed = false;
+  if (path.startsWith("/x/")) {
+    if (method !== "GET" && method !== "HEAD") throw new HttpError(405, "Method not allowed");
+    url = await decodeAppRequest(request, env, url, path.slice(3));
+    path = url.pathname.replace(/\/+$/, "") || "/";
+    appAuthed = true;
+  }
 
   // Media
   if (path.startsWith("/media/") && (method === "GET" || method === "HEAD")) {
     return serveMedia(request, env, decodeURIComponent(path.slice("/media/".length)));
   }
 
-  // Public API
-  if (method === "GET" && path === "/api/movies") return listMovies(url, env);
   // Admin (có ADMIN_TOKEN) luôn đọc dữ liệu mới, không qua cache — tránh tạo trùng phim khi upload
   const fresh = await hasAdminToken(request, env);
+
+  // Bật REQUIRE_APP_AUTH = "true": API public chỉ nhận request đã qua /x/ + X-Auth (hoặc admin có token)
+  if (path.startsWith("/api/") && !path.startsWith("/api/admin/") && !appAuthed && !fresh &&
+      String(env.REQUIRE_APP_AUTH || "").toLowerCase() === "true") {
+    throw new HttpError(403, "Forbidden");
+  }
+
+  // Public API
+  if (method === "GET" && path === "/api/movies") return listMovies(url, env);
   if (method === "GET" && path === "/api/movies/index") return fresh ? movieIndex(url, env) : cached(url, ctx, 300, () => movieIndex(url, env));
   if (method === "GET" && path === "/api/search") return fresh ? searchMovies(url, env) : cached(url, ctx, 60, () => searchMovies(url, env));
   if (method === "GET" && (m = path.match(/^\/api\/movies\/(\d+)$/))) return getMovie(Number(m[1]), url, env);
@@ -491,6 +514,83 @@ async function serveMedia(request, env, key) {
 
   headers.set("content-length", String(obj.size));
   return new Response(isHead ? null : obj.body, { status: 200, headers });
+}
+
+// ---------------------------------------------------------------- bảo mật app (/x/ + X-Auth)
+
+const AUTH_MAX_SKEW_MS = 5 * 60 * 1000;   // token chỉ dùng được trong ±5 phút
+
+/** Giải mã /x/<token> + kiểm tra X-Auth. Trả về URL thật (cùng origin). Sai => 401. */
+async function decodeAppRequest(request, env, url, token) {
+  if (!env.APP_ENC_KEY || !env.APP_HMAC_SECRET) throw new HttpError(500, "APP_ENC_KEY / APP_HMAC_SECRET is not configured");
+
+  // 1) X-Auth = AES-GCM("<ts>|<hmac hex>")
+  const authPlain = await aesGcmDecrypt(env.APP_ENC_KEY, request.headers.get("x-auth"));
+  const sep = authPlain ? authPlain.indexOf("|") : -1;
+  if (sep < 1) throw new HttpError(401, "Unauthorized");
+  const authTs = authPlain.slice(0, sep);
+  const expected = await hmacSha256Hex(env.APP_HMAC_SECRET, authTs);
+  if (!checkTimestamp(authTs) || !safeEqual(authPlain.slice(sep + 1), expected)) throw new HttpError(401, "Unauthorized");
+
+  // 2) /x/<token> = AES-GCM("<path>?<query>|<ts>")
+  const plain = await aesGcmDecrypt(env.APP_ENC_KEY, decodeURIComponent(token));
+  const cut = plain ? plain.lastIndexOf("|") : -1;
+  if (cut < 1 || !checkTimestamp(plain.slice(cut + 1))) throw new HttpError(401, "Unauthorized");
+  const real = plain.slice(0, cut);
+  // chỉ cho phép API public, không cho lồng /x/ hay gọi admin qua đường này
+  if (!real.startsWith("/api/") || real.startsWith("/api/admin/")) throw new HttpError(403, "Forbidden");
+  return new URL(real, url.origin);
+}
+
+function checkTimestamp(ts) {
+  if (!/^\d{10,16}$/.test(ts)) return false;
+  return Math.abs(Date.now() - Number(ts)) <= AUTH_MAX_SKEW_MS;
+}
+
+let _aesKeyCache = null;   // { hex, key } — import khoá 1 lần cho mỗi isolate
+async function aesGcmDecrypt(keyHex, b64) {
+  if (!b64) return null;
+  try {
+    const hex = String(keyHex).trim();
+    if (!_aesKeyCache || _aesKeyCache.hex !== hex) {
+      const raw = new Uint8Array(hex.match(/../g).map((h) => parseInt(h, 16)));
+      const key = await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]);
+      _aesKeyCache = { hex, key };
+    }
+    const bytes = base64ToBytes(b64);
+    if (bytes.length < 12 + 16) return null;
+    const out = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: bytes.slice(0, 12), tagLength: 128 },
+      _aesKeyCache.key,
+      bytes.slice(12)               // cipherText + tag 16 byte (đúng format Dart/Kotlin)
+    );
+    return new TextDecoder().decode(out);
+  } catch {
+    return null;
+  }
+}
+
+/** Nhận cả base64 thường (X-Auth) và base64url không padding (/x/). */
+function base64ToBytes(s) {
+  let b = String(s).trim().replace(/-/g, "+").replace(/_/g, "/");
+  while (b.length % 4) b += "=";
+  const bin = atob(b);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function hmacSha256Hex(secret, message) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, enc.encode(message)));
+  return [...sig].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function safeEqual(a, b) {
+  const enc = new TextEncoder();
+  const x = enc.encode(String(a).toLowerCase()), y = enc.encode(String(b));
+  return x.byteLength === y.byteLength && crypto.subtle.timingSafeEqual(x, y);
 }
 
 // ---------------------------------------------------------------- helpers
