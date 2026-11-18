@@ -27,4 +27,4 @@ MEDIA_BASE_URL = "https://amzshortdrama.lol"
 # ADMIN_TOKEN KHÔNG để ở đây. Đặt bằng lệnh:
 #   npx wrangler secret put ADMIN_TOKEN
 # Khi chạy local, đặt trong file .dev.vars
-REQUIRE_APP_AUTH = "false"
+REQUIRE_APP_AUTH = "true"

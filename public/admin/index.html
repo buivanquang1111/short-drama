@@ -190,6 +190,14 @@ async function api(path, opts = {}) {
   return data;
 }
 
+/** GET API public kèm ADMIN_TOKEN — để vẫn đọc được khi server bật REQUIRE_APP_AUTH = "true" */
+async function authGet(path) {
+  const res = await fetch(path, { headers: { authorization: "Bearer " + TOKEN } });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
 /** Upload multipart có tiến trình */
 function upload(method, path, formData, onProgress) {
   return new Promise((resolve, reject) => {
@@ -266,7 +274,7 @@ function probeVideo(file, wantThumb) {
 $("#saveToken").onclick = async () => {
   TOKEN = $("#token").value.trim();
   try { localStorage.setItem("admin_token", TOKEN); } catch {}
-  try { await api("/api/admin/ping"); $("#authState").textContent = "✓ Đã đăng nhập"; }
+  try { await api("/api/admin/ping"); $("#authState").textContent = "✓ Đã đăng nhập"; loadMovies(); }
   catch (e) { $("#authState").textContent = "✗ " + e.message; }
 };
 
@@ -276,7 +284,9 @@ function tagHtml(tags) {
 }
 
 async function loadMovies() {
-  const data = await fetch("/api/movies?limit=100").then((r) => r.json());
+  let data;
+  try { data = await authGet("/api/movies?limit=100"); }
+  catch (e) { $("#movies").innerHTML = `<div class="muted">Không tải được danh sách (${esc(e.message)}). Đăng nhập bằng ADMIN_TOKEN rồi bấm Tải lại.</div>`; return; }
   $("#movies").innerHTML = (data.movies || []).map((m) => `
     <div class="movie ${current === m.id ? "active" : ""}" data-id="${m.id}">
       ${m.poster ? `<img src="${esc(m.poster)}" loading="lazy" alt="">` : `<div class="ph"></div>`}
@@ -286,9 +296,22 @@ async function loadMovies() {
 }
 $("#reload").onclick = loadMovies;
 
+// "Xem JSON": link thường không gửi được token => tải kèm token rồi mở bản JSON trong tab mới
+$("#dJson").onclick = async (ev) => {
+  ev.preventDefault();
+  if (!current) return;
+  try {
+    const data = await authGet("/api/movies/" + current);
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    window.open(URL.createObjectURL(blob), "_blank");
+  } catch (e) { alert(e.message); }
+};
+
 async function openMovie(id) {
   current = id;
-  const data = await fetch("/api/movies/" + id).then((r) => r.json());
+  let data;
+  try { data = await authGet("/api/movies/" + id); }
+  catch (e) { alert(e.message); return; }
   currentMovie = data.movie;
   currentEps = data.episodes;
   $("#empty").classList.add("hidden");
@@ -300,7 +323,7 @@ async function openMovie(id) {
   $("#dSub").textContent = [`${currentEps.length} tập`, missing ? `${missing} tập chưa có video` : ""].filter(Boolean).join(" · ");
   $("#dPoster").classList.toggle("hidden", !data.movie.poster);
   if (data.movie.poster) $("#dPoster").src = data.movie.poster;
-  $("#dJson").href = "/api/movies/" + id;
+  $("#dJson").href = "#";
   renderEpisodes();
   loadMovies();
 }
@@ -451,14 +474,14 @@ async function preparePlan(files, { name, movieId, afterUpload }) {
   // tìm phim trên server: theo id (phim đang mở) hoặc theo tên thư mục
   let id = movieId || null;
   if (!id) {
-    const index = await fetch("/api/movies/index", { headers: { authorization: "Bearer " + TOKEN } }).then((r) => r.json());
+    const index = await authGet("/api/movies/index");
     const found = (index.movies || []).find((m) => plain(m.title) === plain(name));
     if (found) id = found.id;
   }
   let movie = null;
   const serverEps = new Map();
   if (id) {
-    const d = await fetch("/api/movies/" + id).then((r) => r.json());
+    const d = await authGet("/api/movies/" + id);
     movie = d.movie;
     for (const e of d.episodes) serverEps.set(e.ep_number, e);
   }
