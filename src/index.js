@@ -4,6 +4,7 @@
  * Public (app gọi):
  *   GET  /api/movies?page=1&limit=20     danh sách phim (kèm số tập); thêm &tag=Ngôn%20tình để lọc theo tag
  *   GET  /api/movies/index               toàn bộ phim, chỉ trường gọn (để app tải 1 lần rồi search trên máy), cache 5 phút
+ *   GET  /api/movies/first-episodes      tất cả phim, mỗi phim kèm tập đầu tiên có video (cho màn feed lướt video), cache 5 phút
  *   GET  /api/search?q=ten+phim          tìm phim theo tên / tag (không phân biệt dấu, hoa thường), cache 60 giây
  *   GET  /api/movies/:id                 chi tiết phim + danh sách tập
  *   GET  /api/episodes/:id               chi tiết 1 tập
@@ -67,6 +68,7 @@ async function route(request, env, ctx) {
   // Admin (có ADMIN_TOKEN) luôn đọc dữ liệu mới, không qua cache — tránh tạo trùng phim khi upload
   const fresh = await hasAdminToken(request, env);
   if (method === "GET" && path === "/api/movies/index") return fresh ? movieIndex(url, env) : cached(url, ctx, 300, () => movieIndex(url, env));
+  if (method === "GET" && path === "/api/movies/first-episodes") return fresh ? firstEpisodes(url, env) : cached(url, ctx, 300, () => firstEpisodes(url, env));
   if (method === "GET" && path === "/api/search") return fresh ? searchMovies(url, env) : cached(url, ctx, 60, () => searchMovies(url, env));
   if (method === "GET" && (m = path.match(/^\/api\/movies\/(\d+)$/))) return getMovie(Number(m[1]), url, env);
   if (method === "GET" && (m = path.match(/^\/api\/episodes\/(\d+)$/))) return getEpisode(Number(m[1]), url, env);
@@ -154,6 +156,39 @@ async function movieIndex(url, env) {
       description: r.description,
       poster: keyToUrl(r.poster_key, base),
       episode_count: r.episode_count,
+    })),
+  });
+}
+
+/**
+ * Tất cả phim, mỗi phim kèm tập đầu tiên đã có video (số tập nhỏ nhất).
+ * Phim chưa có tập nào có video thì không có trong danh sách.
+ * 1 query: mỗi phim tra index (movie_id, ep_number) để lấy đúng 1 tập.
+ */
+async function firstEpisodes(url, env) {
+  const { results } = await env.DB.prepare(
+    `SELECT m.id, m.title, m.poster_key, m.episode_count,
+            e.id AS episode_id, e.ep_number, e.thumb_key, e.video_key, e.duration
+       FROM movies m
+       JOIN episodes e ON e.id = (
+         SELECT id FROM episodes
+          WHERE movie_id = m.id AND video_key IS NOT NULL
+          ORDER BY ep_number ASC LIMIT 1)
+      ORDER BY m.id DESC`
+  ).all();
+  const base = mediaBase(url, env);
+  return json({
+    total: results.length,
+    movies: results.map((r) => ({
+      id: r.id,
+      title: r.title,
+      poster: keyToUrl(r.poster_key, base),
+      episode_count: r.episode_count,
+      episode_id: r.episode_id,
+      ep_number: r.ep_number,
+      thumb: keyToUrl(r.thumb_key, base),
+      video_url: keyToUrl(r.video_key, base),
+      duration: r.duration,
     })),
   });
 }
